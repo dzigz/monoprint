@@ -1,0 +1,40 @@
+{
+  "name": "monoprint",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch server/index.ts",
+    "build": "vite build && tsc -p tsconfig.server.json",
+    "start": "NODE_ENV=production node dist-server/server/index.js",
+    "test": "node --import tsx --test src/shared/schema.test.ts server/*.test.ts server/recovery/*.test.ts",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "sidecar": "cd \"${SIDECAR_ROOT:-$HOME/Documents/font_matching_proto}\" && DESIGN_AGENT_MODE=\"${SIDECAR_DESIGN_AGENT_MODE:-aesthetic}\" \"${SIDECAR_PYTHON:-$HOME/Documents/font_realtime_generation/.venv/bin/python}\" scripts/matching/sidecar.py \"${SIDECAR_PORT:-4174}\"",
+    "recover": "tsx scripts/recovery-smoke.ts"
+  },
+  "dependencies": {
+    "@openai/agents": "latest",
+    "dotenv": "latest",
+    "express": "latest",
+    "fontkit": "latest",
+    "mammoth": "^1.12.2",
+    "openai": "latest",
+    "pdfjs-dist": "^6.3.289",
+    "react": "latest",
+    "react-dom": "latest",
+    "sharp": "^0.35.4",
+    "undici": "^8.10.1",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/express": "latest",
+    "@types/fontkit": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}
