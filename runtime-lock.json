@@ -1,0 +1,11 @@
+{
+  "node": "24.19.0",
+  "npm": "11.6.2",
+  "python": "3.12.14",
+  "pipeline": {
+    "repository": "https://github.com/dzigz/font_generation.git",
+    "revision": "8c63244020e1da6f29e11a3f8f818ae7705b79cf"
+  },
+  "validatedEditorRevision": "0258ad17c0d2909caaf4526641b3416e28e3b42a",
+  "pythonPackages": "requirements.local.lock.txt"
+}

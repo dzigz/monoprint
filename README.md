@@ -21,6 +21,8 @@ The deck document is the source of truth. Slides keep a version history: generat
 
 ## Setup
 
+The prepared main checkout at `~/Documents/monoprint` starts both services with `npm run local`. See [the local runtime guide](docs/local-runtime.md) for the pinned pipeline revision, dependency snapshots and further development.
+
 ```sh
 cp .env.example .env.local
 npm install
@@ -55,7 +57,7 @@ That script expects the pipeline worktree at `~/Documents/font_matching_proto` a
 
 ## Recovery adapter
 
-`server/recovery/provider.ts` is the contract: image in, plate and objects out. `server/recovery/sidecarProvider.ts` implements it against the sidecar. It sends the deck's role fonts and role-labelled copy as known typography, then reads the sidecar's run directory for sizes, spacing, fitted fonts, and the composite images. The plate is rebuilt from the composite by filling only the pixels under re-drawn glyphs. Nothing in the pipeline repository is modified.
+`server/recovery/provider.ts` is the contract: image in, plate and objects out. `server/recovery/sidecarProvider.ts` implements it against the sidecar. It sends the deck's role fonts and role-labelled copy as known typography, then reads the sidecar's run directory for sizes, spacing, fitted fonts, and the composite images. The adapter imports the reviewed background plate and canonical resolved text layout directly, so the editor and export use the same geometry as the pipeline. Nothing in the pipeline repository is modified.
 
 Objects are a discriminated union (`kind: "text"` today) so images, shapes, and charts can join later without changing the host.
 
