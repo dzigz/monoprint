@@ -89,7 +89,14 @@ export const editCommandSchema = z.discriminatedUnion("type", [
     style: z.enum(["normal", "italic"]).optional(),
     letterSpacing: z.number().finite().optional(),
   }) }),
-  z.object({ type: z.literal("set_slide_meta"), slideId: z.string(), title: z.string().min(1).optional(), purpose: z.string().min(1).optional(), speakerNotes: z.string().optional() }),
+  z.object({
+    type: z.literal("set_slide_meta"),
+    slideId: z.string(),
+    title: z.string().min(1).optional(),
+    purpose: z.string().min(1).optional(),
+    speakerNotes: z.string().optional(),
+    talkingPoints: z.string().optional().describe("Replace the full spoken transcript in Markdown, including textual focus cues. An empty string clears it. Available before or after text recovery."),
+  }),
   z.object({ type: z.literal("set_deck_title"), title: z.string().min(1) }),
   z.object({ type: z.literal("reorder_slides"), slideIds: z.array(z.string().min(1)).min(1) }),
   z.object({ type: z.literal("delete_slide"), slideId: z.string() }),
@@ -214,6 +221,7 @@ export function applyCommand(deck: Deck, command: EditCommand): Deck {
         ...(command.title !== undefined ? { title: command.title } : {}),
         ...(command.purpose !== undefined ? { purpose: command.purpose } : {}),
         ...(command.speakerNotes !== undefined ? { speakerNotes: command.speakerNotes } : {}),
+        ...(command.talkingPoints !== undefined ? { talkingPoints: command.talkingPoints } : {}),
       });
     }
     case "set_deck_title":

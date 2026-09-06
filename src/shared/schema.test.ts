@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyCommands, EditCommandError } from "./commands.js";
+import { applyCommands, editCommandSchema, EditCommandError } from "./commands.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { DeckStore } from "../../server/deckStore.js";
+import { mergeServerDeck } from "./merge.js";
 import {
   migrateDeck,
+  deckSchema,
   normalizePublishedDeckDraft,
   publishDeckSchema,
   publishDeckToolSchema,
@@ -73,8 +79,8 @@ function input(): PublishedDeckInput {
     title: "Test deck",
     designSystem: designSystem(),
     slides: [
-      { id: "slide-1", title: "Opening", purpose: "Frame the idea", copy: openingCopy(), assetId: "asset-1" },
-      { id: "slide-2", title: "Answer", purpose: "Resolve the idea", copy: answerCopy(), assetId: "asset-2" },
+      { id: "slide-1", title: "Opening", purpose: "Frame the idea", copy: openingCopy(), assetId: "asset-1", talkingPoints: "## Opening\n\nLet's start with the idea we will develop together. **[Point to the headline]** This is the question our talk will answer." },
+      { id: "slide-2", title: "Answer", purpose: "Resolve the idea", copy: answerCopy(), assetId: "asset-2", talkingPoints: "We can now answer the question we started with. **[Point to the closing statement]** This conclusion follows from the explanation we just worked through." },
     ],
     sources: [],
   };
@@ -147,6 +153,27 @@ test("requires role-labelled copy with a font role on every published slide", ()
   const missingFontRole = input() as unknown as { slides: Array<{ copy: Array<Record<string, unknown>> }> };
   delete missingFontRole.slides[0].copy[0].fontRole;
   assert.equal(publishDeckSchema.safeParse(missingFontRole).success, false);
+});
+
+test("requires a non-blank talking transcript on every published slide, including tool input", () => {
+  for (const schema of [publishDeckSchema, publishDeckToolSchema]) {
+    assert.equal(schema.safeParse(input()).success, true);
+    for (const invalid of [undefined, null, "", " \n\t ", ["A bullet summary"]]) {
+      const deck = input();
+      const slide = deck.slides[1] as unknown as Record<string, unknown>;
+      if (invalid === undefined) delete slide.talkingPoints;
+      else slide.talkingPoints = invalid;
+      assert.equal(schema.safeParse(deck).success, false);
+    }
+  }
+});
+
+test("preserves the full Markdown transcript and separate notes through publication normalization", () => {
+  const draft = input();
+  draft.slides[0].speakerNotes = "Supplementary delivery context.";
+  const published = normalizePublishedDeckDraft(publishDeckToolSchema.parse(draft));
+  assert.equal(published.slides[0].talkingPoints, draft.slides[0].talkingPoints);
+  assert.equal(published.slides[0].speakerNotes, draft.slides[0].speakerNotes);
 });
 
 test("rejects an empty copy role", () => {
@@ -335,4 +362,54 @@ test("rejects edits to slides that have not been recovered", () => {
     () => applyCommands(deck, [{ type: "set_text", slideId: "slide-2", objectId: "text-1", text: "x" }]),
     EditCommandError,
   );
+});
+
+test("talking-point commands work across recovery states and leave artwork and notes intact", () => {
+  const original = editableDeck();
+  original.slides[0].speakerNotes = "Supplementary context to retain.";
+  const commands = original.slides.map((slide, index) => editCommandSchema.parse({
+    type: "set_slide_meta",
+    slideId: slide.id,
+    talkingPoints: input().slides[index].talkingPoints,
+  }));
+  const edited = applyCommands(original, commands);
+  for (const [index, slide] of edited.slides.entries()) {
+    assert.equal(slide.talkingPoints, input().slides[index].talkingPoints);
+    const { talkingPoints: _transcript, ...unchanged } = slide;
+    assert.deepEqual(unchanged, original.slides[index]);
+    assert.equal(original.slides[index].talkingPoints, undefined, "undo snapshot stays unchanged");
+  }
+  const renamed = applyCommands(edited, [{ type: "set_slide_meta", slideId: "slide-1", title: "Renamed" }]);
+  assert.equal(renamed.slides[0].talkingPoints, edited.slides[0].talkingPoints);
+  const cleared = applyCommands(edited, [editCommandSchema.parse({ type: "set_slide_meta", slideId: "slide-1", talkingPoints: "" })]);
+  assert.equal(cleared.slides[0].talkingPoints, "");
+  assert.equal(cleared.slides[1].talkingPoints, edited.slides[1].talkingPoints);
+});
+
+test("stored decks accept missing transcripts and preserve transcripts through saves and undo/redo snapshots", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "monoprint-talking-points-"));
+  try {
+    const store = new DeckStore(root);
+    const original = editableDeck();
+    await store.save(original);
+    const loaded = await store.load(original.id);
+    assert.equal(loaded.slides[0].talkingPoints, undefined);
+    const edited = applyCommands(loaded, [{ type: "set_slide_meta", slideId: "slide-1", talkingPoints: input().slides[0].talkingPoints }]);
+    await store.save(edited);
+    assert.equal((await store.load(edited.id)).slides[0].talkingPoints, edited.slides[0].talkingPoints);
+
+    const recoveryUpdate = structuredClone(edited);
+    recoveryUpdate.slides[0].recovery.updatedAt = "2099-01-01T00:00:00.000Z";
+    recoveryUpdate.slides[0].version += 1;
+    // Full-deck undo/redo uses the same schema and server merge as the PUT endpoint.
+    const undone = mergeServerDeck(deckSchema.parse(original), recoveryUpdate);
+    await store.save(undone);
+    assert.equal((await store.load(original.id)).slides[0].talkingPoints, undefined);
+    assert.equal(undone.slides[0].version, recoveryUpdate.slides[0].version);
+    const redone = mergeServerDeck(deckSchema.parse(edited), undone);
+    await store.save(redone);
+    assert.equal((await store.load(original.id)).slides[0].talkingPoints, edited.slides[0].talkingPoints);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

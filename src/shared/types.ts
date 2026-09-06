@@ -259,6 +259,8 @@ export type Slide = {
   sourceIds?: string[];
   transitionFromPrevious?: string;
   speakerNotes?: string;
+  /** Full spoken transcript in Markdown, with inline textual focus cues. */
+  talkingPoints?: string;
 };
 
 export type DeckAssetKind = "slide-image" | "slide-plate" | "slide-export";

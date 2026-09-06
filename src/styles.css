@@ -434,6 +434,22 @@ code { font-family: var(--font-mono); font-size: 0.92em; }
 .panel__facts dt { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); padding-top: 3px; }
 .panel__facts dd { color: var(--ink-2); }
 .panel__section .btn { margin-top: 12px; }
+.talking-points__summary { cursor: pointer; font-family: var(--font-display); font-size: 17px; line-height: 1.4; }
+.talking-points__summary::marker { font-size: 12px; color: var(--ink-3); }
+.talking-points__slide { float: right; padding-top: 5px; font-family: var(--font-mono); font-size: 10px; color: var(--ink-3); }
+.talking-points__summary:focus-visible, .talking-points__transcript:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.talking-points__transcript { margin-top: 16px; max-height: 52vh; overflow-y: auto; overscroll-behavior: contain; padding-right: 8px; font-size: 13.5px; line-height: 1.65; color: var(--ink-2); overflow-wrap: anywhere; }
+.talking-points__transcript > * + * { margin-top: 12px; }
+.talking-points__transcript :is(h1, h2, h3, h4, h5, h6) { margin: 18px 0 8px; font-size: 14px; line-height: 1.4; font-weight: 600; color: var(--ink); }
+.talking-points__transcript > :first-child { margin-top: 0; }
+.talking-points__transcript strong { font-weight: 600; color: var(--ink); }
+.talking-points__transcript ul { padding-left: 20px; list-style: disc; }
+.talking-points__transcript ol { padding-left: 20px; list-style: decimal; }
+.talking-points__transcript li + li { margin-top: 6px; }
+.talking-points__transcript blockquote { margin-left: 0; margin-right: 0; padding-left: 12px; border-left: 2px solid var(--line-strong); }
+.talking-points__transcript pre { white-space: pre-wrap; }
+.talking-points__transcript a { color: inherit; text-underline-offset: 3px; }
+.talking-points__empty { margin-top: 12px; font-size: 13px; color: var(--ink-2); }
 .swatches { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 12px; }
 .swatches li { display: grid; gap: 4px; font-family: var(--font-mono); font-size: 9px; color: var(--ink-3); text-align: center; }
 .swatches i { display: block; aspect-ratio: 1; border: 1px solid var(--line); border-radius: 3px; }

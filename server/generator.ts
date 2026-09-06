@@ -395,6 +395,7 @@ export async function generateDeck({
         ...(retainedSourceIds.length ? { sourceIds: retainedSourceIds } : {}),
         ...(transition ? { transitionFromPrevious: transition } : {}),
         ...(submitted.speakerNotes ? { speakerNotes: submitted.speakerNotes } : {}),
+        talkingPoints: submitted.talkingPoints,
       };
     });
 
@@ -443,6 +444,7 @@ export async function generateDeck({
         ...(slide.sourceIds?.length ? { sourceIds: slide.sourceIds } : {}),
         ...(slide.transitionFromPrevious ? { transitionFromPrevious: slide.transitionFromPrevious } : {}),
         ...(slide.speakerNotes ? { speakerNotes: slide.speakerNotes } : {}),
+        talkingPoints: slide.talkingPoints,
       };
     });
     let draftDeck: Deck = deckSchema.parse({

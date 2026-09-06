@@ -3,6 +3,7 @@ import { api } from "../app/api";
 import type { Route } from "../app/router";
 import { SlideCanvas } from "../editor/SlideCanvas";
 import { PromptPanel } from "../editor/PromptPanel";
+import { TalkingPointsPanel } from "../editor/TalkingPointsPanel";
 import { renderSlideToDataUrl } from "../editor/snapshot";
 import { stepFontSize, Toolbar } from "../editor/Toolbar";
 import { useDeckEditor } from "../editor/useDeckEditor";
@@ -71,7 +72,8 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
         if (event.shiftKey) editor.redo(); else editor.undo();
         return;
       }
-      if (typing) return;
+      // Sidebar controls and scrollable text own their navigation keys.
+      if (typing || target?.closest(".panel")) return;
       if (event.key === "ArrowRight" && !selectedObject && activeIndex < deck.slides.length - 1) { goToSlide(deck.slides[activeIndex + 1]); return; }
       if (event.key === "ArrowLeft" && !selectedObject && activeIndex > 0) { goToSlide(deck.slides[activeIndex - 1]); return; }
       if (!selectedObject) return;
@@ -258,6 +260,8 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
             onRepaintStarted={() => setNotice("Repaint started.")}
             disabled={Boolean(repaintActive)}
           />
+
+          <TalkingPointsPanel slide={activeSlide} slideNumber={activeIndex + 1} />
 
           <section className="panel__section">
             <Eyebrow>This slide</Eyebrow>

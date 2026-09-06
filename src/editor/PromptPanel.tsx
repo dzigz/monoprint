@@ -96,14 +96,15 @@ export function PromptPanel({
       </div>
       <textarea
         className="prompt-panel__input"
+        aria-label="Edit request"
         value={prompt}
         rows={3}
         disabled={disabled || busy}
         placeholder={effectiveScope === "deck"
-          ? "Rename a term everywhere, warm up the palette, change the heading font…"
+          ? "Write talking points for every slide, rename a term everywhere, warm up the palette…"
           : effectiveScope === "object"
             ? "Shorten this, make it a question, move it to the right…"
-            : "Tighten the headline, add a caption, replace the illustration…"}
+            : "Revise the talking points, tighten the headline, replace the illustration…"}
         onChange={(event) => setPrompt(event.target.value)}
         onKeyDown={(event) => {
           if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void submit();

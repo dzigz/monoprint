@@ -91,6 +91,7 @@ const publishedSlideSchema = z.object({
   sourceIds: optionalSourceIds.describe("Only sources that materially support claims on this slide."),
   transitionFromPrevious: optionalNonEmptyString.describe("How this slide advances, deepens, qualifies, contrasts, tests, or applies the preceding understanding."),
   speakerNotes: z.string().optional().describe("Useful interpretation, evidence, qualifications, or delivery context that does not merely repeat visible copy."),
+  talkingPoints: z.string().trim().min(1).describe("Full spoken transcript for this slide, not a summary or bullet outline. Use Markdown paragraphs, short headings, and emphasis; mark focus areas inline as bold bracketed delivery cues such as **[Point to the left column]**. Refer only to elements present on the slide. This is presenter text, separate from visible copy and supplementary speakerNotes."),
 });
 
 const webResearchSourceSchema = z.object({
@@ -217,6 +218,7 @@ const slideSchema = z.object({
   sourceIds: optionalSourceIds,
   transitionFromPrevious: optionalNonEmptyString,
   speakerNotes: z.string().optional(),
+  talkingPoints: z.string().optional(),
 });
 
 /** The author's publish_deck output (generation time). */
@@ -277,6 +279,7 @@ export function normalizePublishedDeckDraft(input: PublishedDeckDraftInput): Pub
       purpose: slide.purpose,
       copy: slide.copy,
       assetId: slide.assetId,
+      talkingPoints: slide.talkingPoints,
       ...(slide.sourceIds?.length ? { sourceIds: slide.sourceIds } : {}),
       ...(slide.transitionFromPrevious ? { transitionFromPrevious: slide.transitionFromPrevious } : {}),
       ...(slide.speakerNotes ? { speakerNotes: slide.speakerNotes } : {}),
@@ -476,6 +479,7 @@ export function migrateDeck(raw: unknown, options: { assetDimensions?: AssetDime
       ...(Array.isArray(slide.sourceIds) && slide.sourceIds.length ? { sourceIds: slide.sourceIds.map(String) } : {}),
       ...(typeof slide.transitionFromPrevious === "string" && slide.transitionFromPrevious ? { transitionFromPrevious: slide.transitionFromPrevious } : {}),
       ...(typeof slide.speakerNotes === "string" && slide.speakerNotes ? { speakerNotes: slide.speakerNotes } : {}),
+      ...(typeof slide.talkingPoints === "string" ? { talkingPoints: slide.talkingPoints } : {}),
     };
   });
   const sourcesRaw = Array.isArray(source.sources) ? source.sources : undefined;

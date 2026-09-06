@@ -9,10 +9,10 @@ import type { Deck, EditRequest, EditResponse, FontCatalogEntry, RepaintProposal
 import { getOpenAIClient } from "./openaiClient.js";
 
 const EDIT_AGENT_INSTRUCTIONS = `
-You edit an existing, art-directed presentation on the user's request. The deck is described as JSON: a design system (four font roles and a seven-color palette) and slides. Recovered slides carry editable text objects with frames in canvas pixels (origin top-left, canvas usually 1536x864). Slides that are not recovered yet can only be repainted.
+You edit an existing, art-directed presentation on the user's request. The deck is described as JSON: a design system (four font roles and a seven-color palette) and slides. Recovered slides carry editable text objects with frames in canvas pixels (origin top-left, canvas usually 1536x864). Visual changes to slides that are not recovered yet need a repaint. Slide metadata, including talkingPoints and speakerNotes, can be edited at any recovery stage.
 
 You have three ways to respond, and you must use exactly one:
-1. apply_edits: for anything the text layer can express. Rewrites, shortening, renaming a term across the deck, moving or resizing text, alignment, emphasis, size steps, palette changes, font role changes, deleting or adding text, retitling. Emit a complete list of commands in one call.
+1. apply_edits: for text-layer and metadata edits. Rewrites, shortening, renaming a term across the deck, moving or resizing text, alignment, emphasis, size steps, palette changes, font role changes, deleting or adding text, retitling, talking points, and speaker notes. Emit a complete list of commands in one call.
 2. propose_repaint: when the request needs new pixels: a different illustration, background, chart, diagram, or a layout overhaul of the painted content. Give the image author a precise instruction. The user confirms before anything is repainted.
 3. A plain text answer: when the user asked a question or the request cannot be done.
 
@@ -21,6 +21,7 @@ Rules:
 - Keep text inside the canvas with comfortable margins. Keep the deck's reading order and hierarchy intact unless asked to change them.
 - When a deck-wide request touches many slides, apply it to every affected slide in one apply_edits call.
 - Preserve the user's wording when they give exact text. Otherwise write plain, specific, editorial copy in the deck's voice.
+- Use set_slide_meta.talkingPoints to write or revise the full spoken talk for a slide, including slides with no transcript yet. Write what the presenter says while the slide is shown, with explanation and natural transitions, not a summary or bullet outline. Format it as Markdown paragraphs, short headings, and emphasis. Mark focus areas inline with bold bracketed delivery cues such as **[Point to the left column]**; describe only elements supported by the current slide. These cues are text only. Keep facts grounded in the supplied brief, slide content, and notes; do not invent evidence or visual details. Keep speakerNotes for supplementary context and preserve them unless asked to edit them. A talking-points request changes metadata only, not canvas text or pixels.
 - For size changes use fontSize steps of roughly 10-15 percent; do not shrink text below 14 px or grow body text above the heading size.
 - To choose a different font family use find_fonts first and then set_font_role with the exact catalog id and family.
 - Never invent object ids or slide ids. Use only those in the deck description.
@@ -34,6 +35,9 @@ function describeSlide(slide: Slide, index: number, includeObjects: boolean) {
     number: index + 1,
     title: slide.title,
     purpose: slide.purpose,
+    transitionFromPrevious: slide.transitionFromPrevious,
+    speakerNotes: slide.speakerNotes,
+    talkingPoints: slide.talkingPoints,
     state: slide.state,
     canvas: slide.canvas,
     editable: Boolean(slide.layers),
@@ -57,6 +61,7 @@ function describeDeck(deck: Deck, request: EditRequest) {
   const inScope = (slide: Slide) => request.scope === "deck" || slide.id === request.slideId;
   return {
     deckTitle: deck.title,
+    brief: deck.brief.prompt,
     designSystem: {
       name: deck.designSystem.name,
       creativeDirection: deck.designSystem.creativeDirection,
