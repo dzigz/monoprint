@@ -3,7 +3,7 @@
 // showing the prompt agent what the user sees.
 
 import type { Deck, Slide, TextObject } from "../shared/types";
-import { fontFamilyFor, resolveFont } from "./fonts";
+import { fontFamilyFor, resolveFont, loadFont } from "./fonts";
 
 function loadImage(url: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
@@ -57,7 +57,30 @@ export async function renderSlideToDataUrl(deck: Deck, slide: Slide, scale = 1):
   return canvas.toDataURL("image/png");
 }
 
-async function drawText(context: CanvasRenderingContext2D, deck: Deck, object: TextObject) {
+export async function drawText(context: CanvasRenderingContext2D, deck: Deck, object: TextObject) {
+  if (object.resolved) {
+    for (const word of object.resolved.words) {
+      const font = deck.fonts.find((candidate) => candidate.id === word.fontId);
+      if (!font) throw new Error(`Missing resolved font ${word.fontId}`);
+      await loadFont(font);
+      const spec = `${font.style} ${font.weight} ${word.em}px ${JSON.stringify(fontFamilyFor(font))}`;
+      await document.fonts.load(spec, word.text);
+      context.save();
+      context.font = spec;
+      context.fontKerning = "normal";
+      context.textBaseline = "alphabetic";
+      context.textAlign = "left";
+      context.fillStyle = word.color;
+      context.letterSpacing = "0px";
+      context.wordSpacing = "0px";
+      context.translate(object.frame.x + word.baseline[0], object.frame.y + word.baseline[1]);
+      context.scale(word.scaleX, 1);
+      context.rotate(word.angle * Math.PI / 180);
+      context.fillText(word.text, 0, 0);
+      context.restore();
+    }
+    return;
+  }
   const font = resolveFont(deck, object.style);
   const family = font ? `${JSON.stringify(fontFamilyFor(font))}, ${JSON.stringify(font.family)}` : "sans-serif";
   const size = object.style.fontSize;

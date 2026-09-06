@@ -4,17 +4,17 @@
 // deck's known fonts and copy, then reads its run directory to assemble
 // editable objects. Nothing in the sidecar repo is modified.
 
-import { access, readdir, readFile, stat } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { objectsFromResolved, type PipelineLayout } from "./resolvedLayout.js";
 import * as fontkit from "fontkit";
 import sharp from "sharp";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import type { DeckFont, FontRoleName, SlideCopyItem } from "../../src/shared/types.js";
 import { FONT_ROLE_NAMES } from "../../src/shared/types.js";
 import type { FontRegistry } from "../fonts.js";
-import { buildPlateFromComposite } from "./plate.js";
 import type { RecoveryFontInput, RecoveryInput, RecoveryResult, SlideRecoveryProvider } from "./provider.js";
-import { buildTextObjects, type PoolFont, type RecoveredBlock, type RecoveredWord } from "./textBlocks.js";
 
 export type SidecarProviderOptions = {
   baseUrl: string;
@@ -37,6 +37,8 @@ type SidecarWord = {
 
 type SidecarTextLayer = {
   doc: string;
+  resolved?: PipelineLayout;
+  revision?: string;
   page_size: [number, number];
   blocks: Array<{ id: number | string; role?: string; words: SidecarWord[] }>;
 };
@@ -52,7 +54,7 @@ type SidecarResponse = {
 };
 
 type KnownPayload = {
-  faces: Record<string, { fid: string; path: string; wght: number; family: string; weight: string }>;
+  faces: Record<string, { fid: string; path: string; face_index: number; slant: string; wght: number; family: string; weight: string }>;
   copy: Array<{ label: string; text: string; face: string }>;
   body: string;
 };
@@ -106,14 +108,6 @@ async function readJson<T>(filePath: string): Promise<T | undefined> {
   }
 }
 
-function sanitizePool(pool: string) {
-  return pool.replace(/\//g, "_").replace(/\|/g, "-");
-}
-
-function sanitizeFace(face: string) {
-  return face.replace(/[^A-Za-z0-9]+/g, "_");
-}
-
 export class SidecarRecoveryProvider implements SlideRecoveryProvider {
   readonly name = "font-matching-sidecar";
 
@@ -160,6 +154,8 @@ export class SidecarRecoveryProvider implements SlideRecoveryProvider {
       faces[name] = {
         fid: faceCensusId(font),
         path: font.path,
+        face_index: font.faceIndex,
+        slant: font.style === "italic" ? "italic" : "upright",
         wght: font.weight,
         family: font.family,
         weight: styleWord(font.weight),
@@ -233,122 +229,58 @@ export class SidecarRecoveryProvider implements SlideRecoveryProvider {
   }
 
   private async runDirectoryComplete(docDirectory: string) {
-    return (await exists(path.join(docDirectory, "match_A_final.png")))
-      && (await exists(path.join(docDirectory, "match_A_layer.png")))
-      && (await exists(path.join(docDirectory, "render_ems.json")));
+    const state = await readJson<{ schema: number; revision: string; assets: Record<string, string>; code_files: Record<string, string>; input_files: Record<string, string | null>; source_fonts: Record<string, string> }>(path.join(docDirectory, "render_state.json"));
+    if (!state || state.schema < 4 || !state.code_files || !state.input_files) return false;
+    for (const [name, hash] of Object.entries({ ...state.assets, ...state.code_files, ...state.input_files, ...state.source_fonts })) {
+      const file = path.isAbsolute(name) ? name : path.join(docDirectory, name);
+      if (hash === null) { if (await exists(file)) return false; continue; }
+      if (!hash || !(await exists(file)) || createHash("sha256").update(await readFile(file)).digest("hex") !== hash) return false;
+    }
+    if (this.options.designAgent) {
+      const review = await readJson<{ status: string; reviewed_revision: string; revision: string }>(path.join(docDirectory, "design_report.json"));
+      if (!review || review.status !== "reviewed" || review.revision !== state.revision || review.reviewed_revision !== state.revision) return false;
+    }
+    return true;
   }
 
   /** Rebuild the sidecar's text layer from its run directory (used when reusing a finished run). */
   private async textLayerFromRunDirectory(docDirectory: string, imagePath: string): Promise<SidecarTextLayer> {
-    const ocr = await readJson<{ words?: Array<{ text: string; image_bbox: number[] }> } | Array<{ text: string; image_bbox: number[] }>>(
-      path.join(docDirectory, "ocr", "word_bboxes.json"),
-    );
-    const words = (Array.isArray(ocr) ? ocr : ocr?.words ?? []).map((word) => ({ text: word.text, box: [...word.image_bbox] as number[] }));
-    const blocks = (await readJson<{ blocks?: Array<{ id: number | string; role?: string; words?: number[] }> }>(path.join(docDirectory, "blocks.json")))?.blocks ?? [];
-    const asg2 = (await readJson<Record<string, string>>(path.join(docDirectory, "asg2.json"))) ?? {};
-    const overrides = (await readJson<{ drop_words?: number[]; set_text?: Record<string, string>; set_box?: Record<string, number[]>; plates?: number[][] }>(
-      path.join(docDirectory, "design_overrides.json"),
-    )) ?? {};
-    const unrenderable = (await readJson<Record<string, unknown>>(path.join(docDirectory, "unrenderable.json"))) ?? {};
-    const dropped = new Set<number>([...(overrides.drop_words ?? []), ...Object.keys(unrenderable).map(Number)]);
-    for (const box of overrides.plates ?? []) {
-      words.forEach((word, index) => {
-        const cx = (word.box[0] + word.box[2]) / 2;
-        const cy = (word.box[1] + word.box[3]) / 2;
-        if (box[0] <= cx && cx <= box[2] && box[1] <= cy && cy <= box[3]) dropped.add(index);
-      });
-    }
-    for (const [key, text] of Object.entries(overrides.set_text ?? {})) {
-      const index = Number(key);
-      if (words[index] && String(text).trim()) words[index].text = String(text).trim();
-    }
-    for (const [key, box] of Object.entries(overrides.set_box ?? {})) {
-      const index = Number(key);
-      if (words[index] && box.length === 4) words[index].box = box.map(Number);
-    }
-    const image = sharp(imagePath).ensureAlpha();
-    const { data, info } = await image.raw().toBuffer({ resolveWithObject: true });
-    const W = info.width;
-    const H = info.height;
-    const sampleColor = (box: number[]): [number, number, number] => {
-      const x0 = Math.max(0, Math.round(box[0]));
-      const y0 = Math.max(0, Math.round(box[1]));
-      const x1 = Math.min(W, Math.round(box[2]));
-      const y1 = Math.min(H, Math.round(box[3]));
-      if (x1 - x0 < 2 || y1 - y0 < 2) return [17, 17, 17];
-      const ring: number[][] = [];
-      const inner: Array<[number, number, number]> = [];
-      for (let y = y0; y < y1; y += 1) {
-        for (let x = x0; x < x1; x += 1) {
-          const offset = (y * W + x) * 4;
-          const pixel: [number, number, number] = [data[offset], data[offset + 1], data[offset + 2]];
-          if (y === y0 || y === y1 - 1 || x === x0 || x === x1 - 1) ring.push(pixel);
-          else inner.push(pixel);
-        }
-      }
-      const med = (values: number[]) => { const s = [...values].sort((a, b) => a - b); return s[Math.floor(s.length / 2)] ?? 0; };
-      const background = [med(ring.map((p) => p[0])), med(ring.map((p) => p[1])), med(ring.map((p) => p[2]))];
-      const distances = inner.map((p) => Math.hypot(p[0] - background[0], p[1] - background[1], p[2] - background[2]));
-      const peak = Math.max(...distances, 1);
-      const ink = inner.filter((_, index) => distances[index] >= 0.5 * peak);
-      if (!ink.length) return [17, 17, 17];
-      return [med(ink.map((p) => p[0])), med(ink.map((p) => p[1])), med(ink.map((p) => p[2]))];
-    };
-    return {
-      doc: path.basename(docDirectory),
-      page_size: [W, H],
-      blocks: blocks.map((block) => ({
-        id: block.id,
-        role: block.role,
-        words: (block.words ?? [])
-          .filter((index) => index < words.length && !dropped.has(index) && asg2[String(index)])
-          .map((index) => {
-            const word = words[index];
-            return {
-              id: index,
-              text: word.text,
-              box_pct: [
-                (100 * word.box[0]) / W,
-                (100 * word.box[1]) / H,
-                (100 * (word.box[2] - word.box[0])) / W,
-                (100 * (word.box[3] - word.box[1])) / H,
-              ] as [number, number, number, number],
-              pool: asg2[String(index)],
-              color: sampleColor(word.box),
-            };
-          }),
-      })),
-    };
+    const resolved = await readJson<PipelineLayout>(path.join(docDirectory, "resolved_layout.json"));
+    const state = await readJson<{ revision: string }>(path.join(docDirectory, "render_state.json"));
+    if (resolved && state) return { doc: path.basename(docDirectory), page_size: resolved.page_size, blocks: [], resolved, revision: state.revision };
+    throw new Error("This run has no resolved layout; reconstruct it with the current pipeline.");
   }
 
-  /**
-   * The fitted instance font for a pool. A run directory keeps instance files
-   * from earlier runs of the same slide, so the file is chosen by the face the
-   * current run elected; only when that file is missing does the newest file
-   * for the pool serve as a fallback.
-   */
-  private async fittedFontFile(docDirectory: string, pool: string, chosenFace?: string) {
-    const fontsDirectory = path.join(docDirectory, "matched_fonts");
-    let files: string[];
-    try {
-      files = await readdir(fontsDirectory);
-    } catch {
-      return undefined;
+  private async requestMatches(docDirectory: string, input: RecoveryInput, known: KnownPayload) {
+    const request = await readJson<{ image: string; known: KnownPayload; fonts: Record<string, string>; deck: string; designAgent: boolean }>(path.join(docDirectory, "request.json"));
+    if (!request || request.deck !== input.deckId.slice(0,8) || request.designAgent !== this.options.designAgent || stableJson(request.known) !== stableJson(known)) return false;
+    if (request.image !== createHash("sha256").update(await readFile(input.imagePath)).digest("hex")) return false;
+    for (const [file, hash] of Object.entries(request.fonts ?? {})) {
+      if (!(await exists(file)) || createHash("sha256").update(await readFile(file)).digest("hex") !== hash) return false;
     }
-    const prefix = `${sanitizePool(pool)}__`;
-    if (chosenFace) {
-      const exact = `${prefix}${sanitizeFace(chosenFace)}__cal.ttf`;
-      if (files.includes(exact)) return path.join(fontsDirectory, exact);
+    return true;
+  }
+
+  private async resolvedResult(input: RecoveryInput, docDirectory: string, textLayer: SidecarTextLayer, reused: boolean): Promise<RecoveryResult> {
+    const layout = textLayer.resolved!;
+    const registered = new Map<string, DeckFont>();
+    for (const [key, rec] of Object.entries(layout.fonts)) {
+      if (rec.face_index !== 0) throw new Error("Resolved font instances must contain one face.");
+      if (createHash("sha256").update(await readFile(rec.path)).digest("hex") !== rec.sha256) throw new Error(`Resolved font changed: ${rec.path}`);
+      const opened = fontkit.openSync(rec.path);
+      const face = ("fonts" in opened ? opened.fonts[0] : opened) as fontkit.Font;
+      const font = await this.options.fontRegistry.registerFittedFont({
+        deckId: input.deckId, sourcePath: rec.path, family: face.familyName,
+        subfamily: face.subfamilyName, label: `resolved_${key}`,
+      });
+      registered.set(key, font);
     }
-    const candidates = files.filter((file) => file.startsWith(prefix) && (file.endsWith("__cal.ttf") || file.endsWith("__floor.ttf")));
-    if (!candidates.length) return undefined;
-    const withTimes = await Promise.all(candidates.map(async (file) => {
-      const fullPath = path.join(fontsDirectory, file);
-      const { mtimeMs } = await stat(fullPath);
-      return { fullPath, mtimeMs, calibrated: file.endsWith("__cal.ttf") };
-    }));
-    withTimes.sort((a, b) => Number(b.calibrated) - Number(a.calibrated) || b.mtimeMs - a.mtimeMs);
-    return withTimes[0].fullPath;
+    await input.onProgress?.("Loading the reviewed layout and background plate.");
+    const platePath = path.join(input.outputDirectory, `${input.assetId}.plate.png`);
+    await sharp(path.join(docDirectory, "match_A_plate.png")).resize(input.canvas.width, input.canvas.height, { fit: "fill" }).png().toFile(platePath);
+    const objects = objectsFromResolved(layout, registered, input.canvas, textLayer.revision!);
+    return { platePath, objects, fonts: [...registered.values()], provider: this.name, providerRef: path.basename(docDirectory),
+      diagnostics: { reused, docDirectory, revision: textLayer.revision, words: Object.keys(layout.words).length, layoutSchema: layout.schema, plateFilledPixels: 0 } };
   }
 
   async recover(input: RecoveryInput): Promise<RecoveryResult> {
@@ -358,7 +290,8 @@ export class SidecarRecoveryProvider implements SlideRecoveryProvider {
     let textLayer: SidecarTextLayer;
     let reused = false;
 
-    if (this.options.reuseRuns && !input.fresh && await this.runDirectoryComplete(docDirectory)) {
+    if (this.options.reuseRuns && !input.fresh && await this.runDirectoryComplete(docDirectory)
+        && await this.requestMatches(docDirectory, input, known)) {
       reused = true;
       const health = await this.health();
       if (health.available) {
@@ -379,124 +312,11 @@ export class SidecarRecoveryProvider implements SlideRecoveryProvider {
       textLayer = response.textLayer;
     }
 
-    const finalPath = path.join(docDirectory, "match_A_final.png");
-    const layerPath = path.join(docDirectory, "match_A_layer.png");
-    if (!(await exists(finalPath)) || !(await exists(layerPath))) {
-      throw new Error(`The pipeline finished but its run directory ${docDirectory} has no composite output.`);
-    }
+    if (!(await this.runDirectoryComplete(docDirectory))) throw new Error("The pipeline output changed or still needs design review. Reconstruct this slide.");
+    if (textLayer.resolved && textLayer.revision) return this.resolvedResult(input, docDirectory, textLayer, reused);
+    throw new Error("The pipeline did not return a resolved layout. Update the sidecar and reconstruct this slide.");
 
-    await input.onProgress?.("Rebuilding the background plate.");
-    const platePath = path.join(input.outputDirectory, `${input.assetId}.plate.png`);
-    const plate = await buildPlateFromComposite({ finalPath, layerPath, outputPath: platePath });
 
-    const renderEms = (await readJson<{ words?: Record<string, number> }>(path.join(docDirectory, "render_ems.json")))?.words ?? {};
-    const spaceCal = (await readJson<{ pools?: Record<string, { ratio?: number }> }>(path.join(docDirectory, "spacecal.json")))?.pools ?? {};
-    const weightFit = (await readJson<Record<string, { chosen?: string; adopted?: string }>>(path.join(docDirectory, "weightfit.json"))) ?? {};
-
-    const roleByCensusId = new Map<string, FontRoleName>();
-    for (const font of input.fonts) {
-      for (const id of new Set([faceCensusId(font), censusId(font.family, font.subfamily)])) {
-        if (!roleByCensusId.has(id)) roleByCensusId.set(id, font.role);
-      }
-    }
-    const roleFontByRole = new Map<FontRoleName, RecoveryFontInput>(input.fonts.map((font) => [font.role, font]));
-
-    const [pageWidth, pageHeight] = textLayer.page_size;
-    const scaleX = input.canvas.width / pageWidth;
-    const scaleY = input.canvas.height / pageHeight;
-    const poolNames = new Set<string>();
-    const blocks: RecoveredBlock[] = textLayer.blocks.map((block) => ({
-      id: block.id,
-      role: block.role,
-      words: block.words.map((word): RecoveredWord => {
-        if (word.pool) poolNames.add(word.pool);
-        const [px, py, pw, ph] = word.box_pct;
-        const x0 = (px / 100) * pageWidth * scaleX;
-        const y0 = (py / 100) * pageHeight * scaleY;
-        const x1 = ((px + pw) / 100) * pageWidth * scaleX;
-        const y1 = ((py + ph) / 100) * pageHeight * scaleY;
-        const em = renderEms[String(word.id)];
-        return {
-          id: word.id,
-          text: word.text,
-          box: [x0, y0, x1, y1],
-          pool: word.pool,
-          color: word.color && word.color.length === 3 ? [word.color[0], word.color[1], word.color[2]] : undefined,
-          em: em !== undefined ? em * scaleX : undefined,
-        };
-      }),
-    }));
-
-    const poolFonts = new Map<string, PoolFont>();
-    const fonts: DeckFont[] = [];
-    for (const pool of poolNames) {
-      const chosen = weightFit[pool]?.chosen ?? weightFit[pool]?.adopted;
-      const [family = "", subfamily = "Regular"] = (chosen ?? "").split("|").map((part) => part.replace(/_/g, " "));
-      const role = (chosen ? roleByCensusId.get(chosen) : undefined)
-        ?? (/heading/.test(pool) ? "heading" : /label/.test(pool) ? "label" : "body");
-      const fittedPath = await this.fittedFontFile(docDirectory, pool, chosen);
-      let font: DeckFont | undefined;
-      if (fittedPath) {
-        font = await this.options.fontRegistry.registerFittedFont({
-          deckId: input.deckId,
-          sourcePath: fittedPath,
-          family: family || roleFontByRole.get(role)?.family || "Unknown",
-          subfamily: subfamily || "Regular",
-          label: `${input.assetId.slice(0, 8)}_${path.basename(fittedPath, path.extname(fittedPath))}`,
-        });
-        fonts.push(font);
-      } else {
-        const catalogFace = family ? this.options.fontRegistry.findFace(family, subfamily) : undefined;
-        const catalogId = catalogFace?.id ?? roleFontByRole.get(role)?.catalogId;
-        font = catalogId ? this.options.fontRegistry.deckFontForCatalog(catalogId, false) : undefined;
-      }
-      if (!font) continue;
-      poolFonts.set(pool, { font, fontRole: role, spaceRatio: spaceCal[pool]?.ratio, measure: measureWith(fittedPath ?? this.options.fontRegistry.catalogFilePath(font.catalogId ?? "")?.path) });
-    }
-    const bodyFont = roleFontByRole.get("body");
-    const fallbackFont = bodyFont ? this.options.fontRegistry.deckFontForCatalog(bodyFont.catalogId, false) : undefined;
-    const fallbackPoolFont: PoolFont | undefined = fallbackFont ? { font: fallbackFont, fontRole: "body" } : undefined;
-
-    const objects = buildTextObjects({
-      blocks,
-      poolFonts,
-      fallbackPoolFont,
-      canvas: input.canvas,
-      colors: input.colors,
-      copy: input.copy,
-    });
-
-    return {
-      platePath,
-      objects,
-      fonts,
-      provider: this.name,
-      providerRef: docName,
-      diagnostics: {
-        reused,
-        docDirectory,
-        words: blocks.reduce((sum, block) => sum + block.words.length, 0),
-        pools: [...poolNames],
-        plateFilledPixels: plate.filledPixels,
-      },
-    };
-  }
-}
-
-function measureWith(fontPath: string | undefined) {
-  if (!fontPath) return undefined;
-  try {
-    const opened = fontkit.openSync(fontPath);
-    const font = ("fonts" in opened ? opened.fonts[0] : opened) as fontkit.Font;
-    return (text: string) => {
-      try {
-        return font.layout(text).advanceWidth;
-      } catch {
-        return text.length * font.unitsPerEm * 0.55;
-      }
-    };
-  } catch {
-    return undefined;
   }
 }
 
@@ -505,3 +325,9 @@ export function copyForKnownPayload(copy: SlideCopyItem[]) {
 }
 
 export { FONT_ROLE_NAMES };
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value).sort(([a],[b]) => a.localeCompare(b)).map(([k,v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(",")}}`;
+  return JSON.stringify(value);
+}

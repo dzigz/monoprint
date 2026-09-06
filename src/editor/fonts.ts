@@ -31,6 +31,10 @@ export function loadFont(font: DeckFont) {
       await face.load();
       document.fonts.add(face);
     } catch (error) {
+      if (font.source === "fitted") {
+        loaded.delete(font.id);
+        throw new Error(`Could not load the exact recovered font ${font.id}`, { cause: error });
+      }
       console.warn(`Font ${font.family} ${font.subfamily} could not be loaded; falling back.`, error);
       try {
         const face = new FontFace(fontFamilyFor(font), (font.localNames ?? [font.family]).map((name) => `local(${JSON.stringify(name)})`).join(", "));

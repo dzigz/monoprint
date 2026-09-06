@@ -47,6 +47,14 @@ export const textObjectSchema = z.object({
   frame: frameSchema,
   text: z.string().max(4000),
   style: textStyleSchema,
+  resolved: z.object({
+    revision: z.string(),
+    words: z.array(z.object({
+      id: z.number().int(), text: z.string(), fontId: z.string(),
+      em: z.number().finite().positive(), baseline: z.tuple([z.number().finite(), z.number().finite()]),
+      angle: z.number().finite(), color: hexColor, line: z.string(), scaleX: z.number().finite().positive(),
+    })),
+  }).optional(),
   copyRole: z.string().optional(),
   locked: z.boolean().optional(),
   origin: z.object({
@@ -131,7 +139,7 @@ export function applyCommand(deck: Deck, command: EditCommand): Deck {
   switch (command.type) {
     case "set_text": {
       const slide = findSlide(deck, command.slideId);
-      return replaceSlide(deck, updateObject(slide, command.objectId, (object) => ({ ...object, text: command.text })));
+      return replaceSlide(deck, updateObject(slide, command.objectId, (object) => ({ ...object, text: command.text, resolved: object.text === command.text ? object.resolved : undefined })));
     }
     case "move_object": {
       const slide = findSlide(deck, command.slideId);
@@ -145,6 +153,7 @@ export function applyCommand(deck: Deck, command: EditCommand): Deck {
       return replaceSlide(deck, updateObject(slide, command.objectId, (object) => ({
         ...object,
         frame: clampFrame(command.frame, slide.canvas),
+        resolved: command.frame.width === object.frame.width ? object.resolved : undefined,
       })));
     }
     case "set_text_style": {
@@ -152,7 +161,13 @@ export function applyCommand(deck: Deck, command: EditCommand): Deck {
       return replaceSlide(deck, updateObject(slide, command.objectId, (object) => {
         const style: TextStyle = { ...object.style, ...command.style };
         if (command.style.color !== undefined && command.style.colorRole === undefined) delete style.colorRole;
-        return { ...object, style };
+        const changesGeometry = Object.entries(command.style).some(([key, value]) =>
+          !["color", "colorRole"].includes(key) && value !== object.style[key as keyof TextStyle]);
+        const resolved = changesGeometry ? undefined : object.resolved && {
+          ...object.resolved,
+          words: object.resolved.words.map((word) => ({ ...word, color: command.style.color ?? word.color })),
+        };
+        return { ...object, style, resolved };
       }));
     }
     case "add_text": {

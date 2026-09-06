@@ -9,7 +9,7 @@
     "start": "NODE_ENV=production node dist-server/server/index.js",
     "test": "node --import tsx --test src/shared/schema.test.ts server/*.test.ts server/recovery/*.test.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
-    "sidecar": "cd \"${SIDECAR_ROOT:-$HOME/Documents/font_matching_proto}\" && DESIGN_AGENT_MODE=\"${SIDECAR_DESIGN_AGENT_MODE:-aesthetic}\" \"${SIDECAR_PYTHON:-$HOME/Documents/font_realtime_generation/.venv/bin/python}\" scripts/matching/sidecar.py \"${SIDECAR_PORT:-4174}\"",
+    "sidecar": "cd \"${SIDECAR_ROOT:-$HOME/Documents/font_matching_proto}\" && DESIGN_AGENT_MODE=\"${SIDECAR_DESIGN_AGENT_MODE:-aesthetic}\" SIDECAR_PYTHON=\"${SIDECAR_PYTHON:-$HOME/Documents/font_realtime_generation/.venv/bin/python}\" sh scripts/matching/python.sh scripts/matching/sidecar.py \"${SIDECAR_PORT:-4174}\"",
     "recover": "tsx scripts/recovery-smoke.ts"
   },
   "dependencies": {

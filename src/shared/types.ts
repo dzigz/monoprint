@@ -147,12 +147,32 @@ export type ObjectOrigin = {
   confidence?: number;
 };
 
+/** Exact baseline placements imported from the reconstruction renderer.
+ * Coordinates are relative to the object frame, so moving a paragraph keeps
+ * every word and mixed font run together. Content/reflow edits invalidate it.
+ */
+export type ResolvedText = {
+  revision: string;
+  words: Array<{
+    id: number;
+    text: string;
+    fontId: string;
+    em: number;
+    baseline: [number, number];
+    angle: number;
+    color: string;
+    line: string;
+    scaleX: number;
+  }>;
+};
+
 export type TextObject = {
   id: string;
   kind: "text";
   frame: Frame;
   text: string;
   style: TextStyle;
+  resolved?: ResolvedText;
   copyRole?: string;
   locked?: boolean;
   origin: ObjectOrigin;

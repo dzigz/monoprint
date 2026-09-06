@@ -112,7 +112,9 @@ function TextObjectView({
     <div
       ref={ref}
       className={`text-object ${editing ? "text-object--editing" : ""} ${interactive ? "text-object--interactive" : ""}`}
-      style={textObjectStyle(deck, object, frame)}
+      style={object.resolved && !editing
+        ? { position: "absolute", left: frame.x, top: frame.y, width: frame.width, height: frame.height }
+        : textObjectStyle(deck, object, frame)}
       data-object-id={object.id}
       contentEditable={editing ? ("plaintext-only" as unknown as boolean) : false}
       suppressContentEditableWarning
@@ -128,7 +130,20 @@ function TextObjectView({
         event.stopPropagation();
       } : undefined}
     >
-      {object.text}
+      {object.resolved && !editing ? (
+        <svg width={frame.width} height={frame.height} style={{ overflow: "visible", display: "block" }}>
+          {object.resolved.words.map((word) => {
+            const font = deck.fonts.find((candidate) => candidate.id === word.fontId);
+            const [x,y] = word.baseline;
+            return <text key={word.id} x={0} y={0}
+              transform={`translate(${x} ${y}) scale(${word.scaleX} 1) rotate(${word.angle})`}
+              fontFamily={cssFontStack(font)} fontSize={word.em} fontWeight={font?.weight ?? 400}
+              fontStyle={font?.style ?? "normal"} fill={word.color}
+              style={{ fontKerning: "normal", fontSynthesis: "none", textRendering: "geometricPrecision" }}
+            >{word.text}</text>;
+          })}
+        </svg>
+      ) : object.text}
     </div>
   );
 }
