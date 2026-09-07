@@ -195,7 +195,7 @@ export function applyCommand(deck: Deck, command: EditCommand): Deck {
       for (const [key, value] of Object.entries(command.colors)) {
         if (value) colors[key as keyof DeckColors] = value;
       }
-      return { ...deck, designSystem: { ...deck.designSystem, colors } };
+      return { ...deck, designSystem: { ...deck.designSystem, colors }, slides: deck.slides.map((slide) => slide.layers ? { ...slide, state: "edited" } : slide) };
     }
     case "set_font_role": {
       const current = deck.designSystem.typography[command.role];
@@ -208,6 +208,7 @@ export function applyCommand(deck: Deck, command: EditCommand): Deck {
       };
       return {
         ...deck,
+        slides: deck.slides.map((slide) => slide.layers ? { ...slide, state: "edited" } : slide),
         designSystem: {
           ...deck.designSystem,
           typography: { ...deck.designSystem.typography, [command.role]: font },

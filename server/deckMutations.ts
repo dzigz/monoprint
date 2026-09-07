@@ -19,6 +19,7 @@ type Listener = (event: DeckEvent) => void;
 export class DeckMutations {
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly listeners = new Map<string, Set<Listener>>();
+  private readonly deckListeners = new Set<(deck: Deck) => void>();
 
   constructor(private readonly store: DeckStore, private readonly fonts: FontRegistry) {}
 
@@ -60,7 +61,18 @@ export class DeckMutations {
     };
   }
 
+  onDeckChanged(listener: (deck: Deck) => void) {
+    this.deckListeners.add(listener);
+    return () => { this.deckListeners.delete(listener); };
+  }
+
   emit(deckId: string, event: DeckEvent) {
+    if (event.type === "deck") {
+      for (const listener of this.deckListeners) {
+        try { listener(event.deck); }
+        catch (error) { console.error("Deck change listener failed.", error); }
+      }
+    }
     for (const listener of this.listeners.get(deckId) ?? []) {
       try {
         listener(event);

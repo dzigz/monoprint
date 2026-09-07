@@ -7,6 +7,8 @@ import { TalkingPointsPanel } from "../editor/TalkingPointsPanel";
 import { renderSlideToDataUrl } from "../editor/snapshot";
 import { stepFontSize, Toolbar } from "../editor/Toolbar";
 import { useDeckEditor } from "../editor/useDeckEditor";
+import { useFocusSnapshots } from "../editor/useFocusSnapshots";
+import { currentFocusRegions, focusInputKey } from "../shared/focusRegions";
 import type { AppConfig, Deck, Slide, TextObject } from "../shared/types";
 import { FONT_ROLE_NAMES } from "../shared/types";
 import { Button, Eyebrow, StatusDot, Wordmark, formatDate } from "../ui/primitives";
@@ -25,6 +27,8 @@ function recoveryLabel(slide: Slide) {
 export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string; slideId?: string; config?: AppConfig; navigate: (route: Route, options?: { replace?: boolean }) => void }) {
   const editor = useDeckEditor(deckId);
   const { deck } = editor;
+  const snapshotError = useFocusSnapshots(deck, editor.fontsReady, editor.adoptServerDeck);
+  const [highlight, setHighlight] = useState<{ slideId: string; inputKey: string; cueId: string }>();
   const [selectedObjectId, setSelectedObjectId] = useState<string>();
   const [editingObjectId, setEditingObjectId] = useState<string>();
   const [stageWidth, setStageWidth] = useState(960);
@@ -35,6 +39,16 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
 
   const activeSlide = useMemo(() => deck?.slides.find((slide) => slide.id === slideId) ?? deck?.slides[0], [deck, slideId]);
   const activeIndex = deck && activeSlide ? deck.slides.indexOf(activeSlide) : 0;
+  const inputKey = deck && activeSlide ? focusInputKey(deck, activeSlide) : "";
+  const onHighlight = useCallback((cueId?: string) => {
+    setHighlight((previous) => {
+      if (!cueId || !activeSlide) return previous ? undefined : previous;
+      if (previous?.slideId === activeSlide.id && previous.inputKey === inputKey && previous.cueId === cueId) return previous;
+      return { slideId: activeSlide.id, inputKey, cueId };
+    });
+  }, [activeSlide?.id, inputKey]);
+  const focusBox = deck && activeSlide && highlight?.slideId === activeSlide.id && highlight.inputKey === inputKey
+    ? currentFocusRegions(deck, activeSlide).find((region) => region.cueId === highlight.cueId)?.box : undefined;
   const selectedObject = activeSlide?.layers?.objects.find((object) => object.id === selectedObjectId) as TextObject | undefined;
 
   useEffect(() => {
@@ -215,6 +229,7 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
               deck={deck}
               slide={activeSlide}
               width={stageWidth}
+              focusBox={repaintActive ? undefined : focusBox}
               interactive={Boolean(activeSlide.layers) && !repaintActive}
               selectedId={selectedObjectId}
               editingId={editingObjectId}
@@ -261,7 +276,8 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
             disabled={Boolean(repaintActive)}
           />
 
-          <TalkingPointsPanel slide={activeSlide} slideNumber={activeIndex + 1} />
+          <TalkingPointsPanel key={`${activeSlide.id}/${inputKey}`} deck={deck} slide={activeSlide} slideNumber={activeIndex + 1}
+            onHighlight={onHighlight} snapshotError={snapshotError(activeSlide.id)} onUpdated={editor.adoptServerDeck} />
 
           <section className="panel__section">
             <Eyebrow>This slide</Eyebrow>

@@ -19,6 +19,7 @@
     "express": "latest",
     "fontkit": "latest",
     "mammoth": "^1.12.2",
+    "mdast-util-from-markdown": "^2.0.3",
     "openai": "latest",
     "pdfjs-dist": "^6.3.289",
     "react": "latest",

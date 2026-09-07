@@ -31,6 +31,7 @@ export const api = {
   edit: (deckId: string, body: EditRequest) => request<EditResponse>(`/api/decks/${deckId}/edit`, { method: "POST", body: JSON.stringify(body) }),
   repaint: (deckId: string, slideId: string, instruction: string) => request<{ job: RepaintJob }>(`/api/decks/${deckId}/slides/${slideId}/repaint`, { method: "POST", body: JSON.stringify({ instruction }) }),
   bake: (deckId: string, slideId: string, image: string) => request<{ deck: Deck; assetUrl: string }>(`/api/decks/${deckId}/slides/${slideId}/bake`, { method: "POST", body: JSON.stringify({ image }) }),
+  focusRegions: (deckId: string, slideId: string, inputKey: string, options: { image?: string; retry?: boolean } = {}) => request<{ deck: Deck }>(`/api/decks/${deckId}/slides/${slideId}/focus-regions`, { method: "POST", body: JSON.stringify({ inputKey, ...options }) }),
   startRecovery: (deckId: string, slideIds?: string[], force = false, fresh = false) => request<{ job: RecoveryJob }>(`/api/decks/${deckId}/recovery`, { method: "POST", body: JSON.stringify({ slideIds, force, fresh }) }),
   cancelRecovery: (deckId: string) => request<{ job?: RecoveryJob }>(`/api/decks/${deckId}/recovery/cancel`, { method: "POST", body: "{}" }),
   generate: (body: { prompt: string; attachments: unknown[] }) => request<{ generation: GenerationRecord }>("/api/generate", { method: "POST", body: JSON.stringify(body) }),

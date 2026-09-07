@@ -28,6 +28,17 @@ export function useDeckEditor(deckId: string) {
   const [historyVersion, setHistoryVersion] = useState(0);
   deckRef.current = deck;
 
+  const adoptServerDeck = useCallback((server: Deck) => {
+    setDeck((current) => {
+      if (!current) return server;
+      if (current.id !== server.id) return current;
+      if (server.revision <= current.revision && !pendingRef.current.length) return current;
+      const merged = mergeServerDeck(current, server);
+      return pendingRef.current.length ? safeApply(merged, pendingRef.current) : merged;
+    });
+    void loadDeckFonts(server);
+  }, []);
+
   const flush = useCallback(async () => {
     const commands = pendingRef.current;
     if (!commands.length || !deckRef.current) return;
@@ -74,15 +85,7 @@ export function useDeckEditor(deckId: string) {
         }
       });
     const unsubscribe = subscribeDeck(deckId, {
-      onDeck: (server) => {
-        setDeck((current) => {
-          if (!current) return server;
-          if (server.revision <= current.revision && !pendingRef.current.length) return current;
-          const merged = mergeServerDeck(current, server);
-          return pendingRef.current.length ? safeApply(merged, pendingRef.current) : merged;
-        });
-        void loadDeckFonts(server);
-      },
+      onDeck: adoptServerDeck,
       onRecovery: setRecovery,
       onRepaint: setRepaint,
     });
@@ -90,7 +93,7 @@ export function useDeckEditor(deckId: string) {
       cancelled = true;
       unsubscribe();
     };
-  }, [deckId]);
+  }, [deckId, adoptServerDeck]);
 
   const dispatch = useCallback((commands: EditCommand | EditCommand[]) => {
     const list = Array.isArray(commands) ? commands : [commands];
@@ -160,6 +163,7 @@ export function useDeckEditor(deckId: string) {
     fontsReady,
     dispatch,
     replaceDeck,
+    adoptServerDeck,
     undo,
     redo,
     canUndo,
@@ -167,7 +171,7 @@ export function useDeckEditor(deckId: string) {
     flush,
     setError,
     historyVersion,
-  }), [deck, loading, error, saving, recovery, repaint, fontsReady, dispatch, replaceDeck, undo, redo, canUndo, canRedo, flush, historyVersion]);
+  }), [deck, loading, error, saving, recovery, repaint, fontsReady, dispatch, replaceDeck, adoptServerDeck, undo, redo, canUndo, canRedo, flush, historyVersion]);
 }
 
 function safeApply(deck: Deck, commands: EditCommand[]) {

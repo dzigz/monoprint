@@ -236,6 +236,16 @@ export type RecoveryState = {
 
 export type SlideState = "generated" | "recovered" | "edited";
 
+export type FocusRegion = { cueId: string; box: [number, number, number, number] };
+export type SlideFocusRegions = {
+  inputKey: string;
+  status: "waiting_snapshot" | "queued" | "running" | "ready" | "failed";
+  regions: FocusRegion[];
+  updatedAt: string;
+  model?: string;
+  error?: string;
+};
+
 export type SlideVersion = {
   version: number;
   assetId: string;
@@ -261,6 +271,8 @@ export type Slide = {
   speakerNotes?: string;
   /** Full spoken transcript in Markdown, with inline textual focus cues. */
   talkingPoints?: string;
+  /** Server-owned, source-image pixel rectangles for talking-point cues. */
+  focusRegions?: SlideFocusRegions;
 };
 
 export type DeckAssetKind = "slide-image" | "slide-plate" | "slide-export";

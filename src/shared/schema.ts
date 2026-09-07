@@ -208,6 +208,14 @@ const slideSchema = z.object({
     objects: z.array(slideObjectSchema),
   }).optional(),
   recovery: recoveryStateSchema,
+  focusRegions: z.object({
+    inputKey: z.string().min(1),
+    status: z.enum(["waiting_snapshot", "queued", "running", "ready", "failed"]),
+    regions: z.array(z.object({ cueId: z.string().min(1), box: z.tuple([z.number(), z.number(), z.number(), z.number()]) })),
+    updatedAt: z.string(),
+    model: z.string().optional(),
+    error: z.string().optional(),
+  }).optional(),
   version: z.number().int().positive(),
   history: z.array(z.object({
     version: z.number().int().positive(),

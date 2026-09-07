@@ -15,6 +15,7 @@ export function mergeServerDeck(local: Deck, server: Deck): Deck {
     const adoptRaster = remote.version > slide.version;
     return {
       ...slide,
+      focusRegions: remote.focusRegions,
       recovery: remoteNewerRecovery ? remote.recovery : slide.recovery,
       history: remote.history.length >= slide.history.length ? remote.history : slide.history,
       version: Math.max(remote.version, slide.version),

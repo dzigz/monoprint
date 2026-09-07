@@ -16,6 +16,7 @@ import { runEditAgent } from "./editAgent.js";
 import { loadFontCatalog } from "./fontCatalog.js";
 import { FontRegistry } from "./fonts.js";
 import { GenerationManager } from "./generationManager.js";
+import { FocusInputError, FocusRegionManager } from "./focusRegionManager.js";
 import { getOpenAIRequestTimeoutMs } from "./openaiClient.js";
 import { SidecarRecoveryProvider } from "./recovery/sidecarProvider.js";
 import { RecoveryManager } from "./recoveryManager.js";
@@ -42,6 +43,8 @@ const fontCatalog = await loadFontCatalog(fontLibraryRoots);
 const fonts = new FontRegistry(fontCatalog, artifactsRoot);
 const store = new DeckStore(artifactsRoot);
 const mutations = new DeckMutations(store, fonts);
+const focusRegions = new FocusRegionManager(store, mutations);
+mutations.onDeckChanged((deck) => focusRegions.schedule(deck.id));
 const recoveryProvider = new SidecarRecoveryProvider({
   baseUrl: process.env.TEXT_LAYER_SIDECAR_URL ?? "http://127.0.0.1:4174",
   runsDirectory: path.resolve(process.env.SIDECAR_RUNS_DIR ?? path.join(homedir(), "Documents/font_matching_proto/runs/docedit/v4")),
@@ -68,6 +71,7 @@ generations.onAssetReady(async (input) => {
 });
 generations.onCompleted(async (deck) => {
   await recovery.attachPending(deck.id);
+  focusRegions.schedule(deck.id);
   const health = await recoveryProvider.health();
   if (!health.available) {
     console.warn(`Text recovery skipped for deck ${deck.id}: ${health.detail}`);
@@ -111,7 +115,7 @@ app.get("/api/decks", async (_request, response) => {
 app.get("/api/decks/latest", async (_request, response) => {
   try {
     const deck = await store.loadLatest();
-    response.json({ deck: await mutations.load(deck.id) });
+    response.json({ deck: await focusRegions.ensureDeck(deck.id) });
   } catch {
     response.status(404).json({ error: "No deck exists yet." });
   }
@@ -119,13 +123,29 @@ app.get("/api/decks/latest", async (_request, response) => {
 
 app.get("/api/decks/:deckId", async (request, response) => {
   try {
-    response.json({ deck: await mutations.load(request.params.deckId), recovery: recovery.job(request.params.deckId), repaint: repaints.job(request.params.deckId) });
+    response.json({ deck: await focusRegions.ensureDeck(request.params.deckId), recovery: recovery.job(request.params.deckId), repaint: repaints.job(request.params.deckId) });
   } catch {
     response.status(404).json({ error: "Deck not found." });
   }
 });
 
 const commandsBodySchema = z.object({ commands: z.array(editCommandSchema).min(1).max(500) });
+
+const focusRequestSchema = z.object({
+  inputKey: z.string().min(1).max(100),
+  image: z.string().max(40_000_000).optional(),
+  retry: z.boolean().optional(),
+});
+app.post("/api/decks/:deckId/slides/:slideId/focus-regions", async (request, response) => {
+  try {
+    const body = focusRequestSchema.parse(request.body);
+    const deck = await focusRegions.request(request.params.deckId, request.params.slideId, body.inputKey, body.image, body.retry);
+    response.json({ deck });
+  } catch (error) {
+    const status = error instanceof FocusInputError ? error.status : error instanceof z.ZodError ? 400 : 500;
+    response.status(status).json({ error: status === 500 ? "Could not prepare slide highlights." : errorMessage(error, "Invalid highlight request.") });
+  }
+});
 
 app.post("/api/decks/:deckId/commands", async (request, response) => {
   try {
@@ -173,6 +193,10 @@ app.get("/api/decks/:deckId/events", async (request, response) => {
   if (recoveryJob) send("recovery", recoveryJob);
   const repaintJob = repaints.job(deckId);
   if (repaintJob) send("repaint", repaintJob);
+  // Recover events missed between the initial GET and SSE connection, or
+  // while the browser was disconnected. Revision checks discard older copies.
+  void mutations.load(deckId).then((deck) => { if (!response.destroyed) send("deck", deck); }).catch(() => {});
+  focusRegions.schedule(deckId);
   const heartbeat = setInterval(() => response.write(": keep-alive\n\n"), 15_000);
   request.on("close", () => {
     clearInterval(heartbeat);
