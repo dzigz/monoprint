@@ -25,8 +25,9 @@ function FocusStrong({ node, children, ...props }: ComponentProps<"strong"> & Ex
 }
 const markdownComponents = { strong: FocusStrong };
 
-export function TalkingPointsPanel({ deck, slide, slideNumber, snapshotError, onHighlight, onUpdated }: {
+export function TalkingPointsPanel({ deck, slide, slideNumber, snapshotError, spotlight, onSpotlightChange, onHighlight, onUpdated }: {
   deck: Deck; slide: Slide; slideNumber: number; snapshotError?: string;
+  spotlight: boolean; onSpotlightChange: (enabled: boolean) => void;
   onHighlight: (cueId?: string) => void; onUpdated: (deck: Deck) => void;
 }) {
   const transcript = slide.talkingPoints ?? "";
@@ -64,6 +65,13 @@ export function TalkingPointsPanel({ deck, slide, slideNumber, snapshotError, on
         {transcript.trim() ? (
           <>
             <p className="panel__muted">{ready ? "Hover over a bracketed cue or focus it with Tab to highlight its section." : "Full spoken talk. Bracketed cues guide where to point."}</p>
+            {cues.length > 0 && <button
+              type="button" role="switch" aria-checked={spotlight} className="talking-points__spotlight-toggle"
+              onClick={() => onSpotlightChange(!spotlight)}
+            >
+              <span>Spotlight</span>
+              <span className="talking-points__switch" aria-hidden="true" />
+            </button>}
             {cues.length > 0 && !ready && <div className="talking-points__status" role="status">
               <span>{!canLocateFocus(slide) ? "Highlights will be available after text recovery." : error ?? (current?.status === "waiting_snapshot" ? "Preparing updated highlights…" : "Finding focus areas…")}</span>
               {canLocateFocus(slide) && error && <button type="button" className="talking-points__retry" disabled={retrying} onClick={() => void retry()}>{retrying ? "Retrying…" : "Retry highlights"}</button>}

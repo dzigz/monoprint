@@ -9,8 +9,12 @@ The author agent is unchanged. There is no SAM fallback or verifier.
 The structured response must contain exactly one in-bounds pixel rectangle per
 cue. Results are stored in optional `slide.focusRegions` metadata (compatible
 with existing schema 4 decks) and delivered through the existing deck event
-stream. The talking-points panel displays rectangles on hover or keyboard focus.
-The overlay is presentation UI only and is not included in Bake or image exports.
+stream. Hover or keyboard focus shows the original blue rectangle highlight by
+default. The talking-points panel's Spotlight toggle enables a full-colour
+interior with a faded greyscale surround. An 18-screen-pixel transition softens
+only the outside of the rectangle, including its corners. The toggle stays set
+while moving between slides and resets to off when the editor reloads. Both
+overlays are presentation UI only and are not included in Bake or image exports.
 
 Two calls run concurrently. Opening an existing deck backfills missing results
 and resumes interrupted jobs. Edits are debounced and results are keyed to the

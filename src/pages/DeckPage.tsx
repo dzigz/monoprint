@@ -29,6 +29,7 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
   const { deck } = editor;
   const snapshotError = useFocusSnapshots(deck, editor.fontsReady, editor.adoptServerDeck);
   const [highlight, setHighlight] = useState<{ slideId: string; inputKey: string; cueId: string }>();
+  const [spotlight, setSpotlight] = useState(false);
   const [selectedObjectId, setSelectedObjectId] = useState<string>();
   const [editingObjectId, setEditingObjectId] = useState<string>();
   const [stageWidth, setStageWidth] = useState(960);
@@ -230,6 +231,7 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
               slide={activeSlide}
               width={stageWidth}
               focusBox={repaintActive ? undefined : focusBox}
+              focusMode={spotlight ? "spotlight" : "highlight"}
               interactive={Boolean(activeSlide.layers) && !repaintActive}
               selectedId={selectedObjectId}
               editingId={editingObjectId}
@@ -277,6 +279,7 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
           />
 
           <TalkingPointsPanel key={`${activeSlide.id}/${inputKey}`} deck={deck} slide={activeSlide} slideNumber={activeIndex + 1}
+            spotlight={spotlight} onSpotlightChange={setSpotlight}
             onHighlight={onHighlight} snapshotError={snapshotError(activeSlide.id)} onUpdated={editor.adoptServerDeck} />
 
           <section className="panel__section">

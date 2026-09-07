@@ -3,6 +3,7 @@ import type { EditCommand } from "../shared/commands";
 import type { Deck, Frame, Slide, TextObject } from "../shared/types";
 import { cssFontStack, resolveFont } from "./fonts";
 import { snapFrame, type Guide } from "./snapping";
+import { FocusSpotlight } from "./FocusSpotlight";
 
 export type SlideCanvasProps = {
   deck: Deck;
@@ -18,6 +19,7 @@ export type SlideCanvasProps = {
   onMeasure?: (heights: Map<string, number>) => void;
   overlay?: ReactNode;
   focusBox?: [number, number, number, number];
+  focusMode?: "highlight" | "spotlight";
   className?: string;
 };
 
@@ -163,6 +165,7 @@ export function SlideCanvas({
   onMeasure,
   overlay,
   focusBox,
+  focusMode = "highlight",
   className = "",
 }: SlideCanvasProps) {
   const scale = width / slide.canvas.width;
@@ -293,10 +296,12 @@ export function SlideCanvas({
             }}
           />
         ))}
-        {focusBox && !editingId && !interaction && <div
-          className="slide-canvas__focus" aria-hidden="true" data-testid="focus-region"
-          style={{ left: focusBox[0], top: focusBox[1], width: focusBox[2] - focusBox[0], height: focusBox[3] - focusBox[1], borderWidth: 2 / scale, borderRadius: 4 / scale }}
-        />}
+        {focusBox && !editingId && !interaction && (focusMode === "spotlight"
+          ? <FocusSpotlight canvas={slide.canvas} box={focusBox} scale={scale} />
+          : <div
+              className="slide-canvas__focus" aria-hidden="true" data-testid="focus-region"
+              style={{ left: focusBox[0], top: focusBox[1], width: focusBox[2] - focusBox[0], height: focusBox[3] - focusBox[1], borderWidth: 2 / scale, borderRadius: 4 / scale }}
+            />)}
         {interactive && guides.map((guide, index) => (
           <div
             key={`${guide.axis}-${guide.position}-${index}`}
