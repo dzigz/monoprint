@@ -55,6 +55,7 @@ import { DeckStore } from "./deckStore.js";
 import { imageDimensions } from "./recovery/plate.js";
 import { fontCatalogForPrompt } from "./fontCatalog.js";
 import { getOpenAIClient } from "./openaiClient.js";
+import { SLIDE_IMAGE_SETTINGS } from "./slideImageSettings.js";
 import {
   createRepositoryTools,
   isRepositoryToolName,
@@ -527,10 +528,9 @@ export async function generateDeck({
       throwIfAborted(signal);
       if (styleReferences.length === 0) {
         return openai.images.generate({
-          model: "gpt-image-2",
+          ...SLIDE_IMAGE_SETTINGS,
           prompt: completePrompt,
           size: "1536x864",
-          quality: "high",
           output_format: "png",
         }, { signal });
       }
@@ -542,11 +542,10 @@ export async function generateDeck({
       }));
       throwIfAborted(signal);
       return openai.images.edit({
-        model: "gpt-image-2",
+        ...SLIDE_IMAGE_SETTINGS,
         image: referenceImages,
         prompt: completePrompt,
         size: "1536x864",
-        quality: "high",
         output_format: "png",
       }, { signal });
     }, signal));

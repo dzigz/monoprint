@@ -529,5 +529,23 @@ export type AppConfig = {
     available: boolean;
     detail?: string;
   };
+  fontConsolidation: { available: boolean; detail?: string };
+  pptxExport?: { available: boolean; detail?: string };
   platform: string;
+};
+
+export type FontConsolidationSummary = {
+  slides: number;
+  consolidated: number;
+  alreadyUniform: number;
+  preserved: number;
+  skipped: number;
+};
+
+export type PptxExportReport = {
+  slides: number;
+  fonts: number;
+  textBoxes: number;
+  multilineBoxes: number;
+  positionedWords: number;
 };

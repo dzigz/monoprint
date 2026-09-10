@@ -23,6 +23,7 @@ const provider = new SidecarRecoveryProvider({
   docPrefix: process.env.SIDECAR_DOC_PREFIX ?? "kn",
   reuseRuns: true,
   designAgent: true,
+  consolidateFonts: !["0", "false", "off", "no"].includes((process.env.TEXT_FONT_CONSOLIDATION ?? "1").trim().toLowerCase()),
   fontRegistry: fonts,
 });
 const manager = new RecoveryManager(store, mutations, fonts, provider);

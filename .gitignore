@@ -2,7 +2,10 @@ node_modules/
 dist/
 dist-server/
 artifacts/
+output/
+tmp/
 .env.local
 .DS_Store
 
 .local/
+__pycache__/

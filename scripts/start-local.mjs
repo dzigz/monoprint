@@ -68,7 +68,8 @@ const done = new Promise((resolve) => {
   start("Pipeline", "sh", [wrapper, "scripts/matching/sidecar.py", sidecarPort], {
     cwd: pipeline,
     // The pipeline loads its own private .env; app credentials stay with the app.
-    env: { ...process.env, SIDECAR_PYTHON: python, DESIGN_AGENT_MODE: env.SIDECAR_DESIGN_AGENT_MODE ?? "aesthetic" },
+    env: { ...process.env, SIDECAR_PYTHON: python, DESIGN_AGENT_MODE: env.SIDECAR_DESIGN_AGENT_MODE ?? "aesthetic",
+      TEXT_FONT_CONSOLIDATION: env.TEXT_FONT_CONSOLIDATION ?? "1" },
   });
   void (async () => {
     for (let attempt = 0; attempt < 60 && !stopping; attempt++) {

@@ -13,6 +13,7 @@ import type { Deck, DeckAsset, RepaintJob, Slide, SlideCopyItem } from "../src/s
 import type { DeckMutations } from "./deckMutations.js";
 import type { DeckStore } from "./deckStore.js";
 import { getOpenAIClient } from "./openaiClient.js";
+import { SLIDE_IMAGE_SETTINGS } from "./slideImageSettings.js";
 import { imageDimensions } from "./recovery/plate.js";
 
 export function copyFromSlide(slide: Slide): SlideCopyItem[] {
@@ -129,11 +130,10 @@ export class RepaintManager {
         { type: "image/png" },
       )));
       const response = await openai.images.edit({
-        model: "gpt-image-2",
+        ...SLIDE_IMAGE_SETTINGS,
         image: images,
         prompt,
         size: `${slide.canvas.width}x${slide.canvas.height}` as "1536x864",
-        quality: "high",
       }, { signal });
       const encoded = response.data?.[0]?.b64_json;
       if (!encoded) throw new Error("Image generation returned no data.");

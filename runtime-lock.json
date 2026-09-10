@@ -4,7 +4,7 @@
   "python": "3.12.14",
   "pipeline": {
     "repository": "https://github.com/dzigz/font_generation.git",
-    "revision": "8c63244020e1da6f29e11a3f8f818ae7705b79cf"
+    "revision": "c58b73eb232d17f84a9eb101fc47be16bdda6af3"
   },
   "validatedEditorRevision": "0258ad17c0d2909caaf4526641b3416e28e3b42a",
   "pythonPackages": "requirements.local.lock.txt"

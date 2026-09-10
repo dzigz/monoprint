@@ -34,6 +34,9 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
   const [editingObjectId, setEditingObjectId] = useState<string>();
   const [stageWidth, setStageWidth] = useState(960);
   const [exporting, setExporting] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportingPptx, setExportingPptx] = useState(false);
+  const [consolidating, setConsolidating] = useState<"slide" | "deck">();
   const [notice, setNotice] = useState<string>();
   const stageRef = useRef<HTMLDivElement>(null);
   const heightsRef = useRef(new Map<string, number>());
@@ -117,20 +120,48 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
     return () => window.removeEventListener("keydown", onKey);
   }, [deck, activeSlide, activeIndex, selectedObject, editingObjectId, editor, goToSlide]);
 
-  async function exportPng() {
-    if (!deck || !activeSlide) return;
-    setExporting(true);
+  async function exportPdf() {
+    if (!deck || exportingPdf) return;
+    // Commit any active contenteditable before taking one stable deck snapshot.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    setEditingObjectId(undefined);
+    setExportingPdf(true);
+    editor.setError(undefined);
+    setNotice("Preparing PDF…");
     try {
-      const dataUrl = await renderSlideToDataUrl(deck, activeSlide, 1);
-      const anchor = document.createElement("a");
-      anchor.href = dataUrl;
-      anchor.download = `${deck.title.replace(/[^\w-]+/g, "_")}-slide-${activeIndex + 1}.png`;
-      anchor.click();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const snapshot = await editor.flush();
+      if (!snapshot) throw new Error("Save your pending edits before exporting.");
+      const { exportDeckToPdf, downloadPdf } = await import("../editor/pdfExport");
+      const blob = await exportDeckToPdf(snapshot, (completed, total) => setNotice(`Preparing PDF · ${completed}/${total} slides`));
+      downloadPdf(blob, snapshot.title);
+      setNotice(`PDF ready · ${snapshot.slides.length} slides`);
     } catch (error) {
-      editor.setError(error instanceof Error ? error.message : "Export failed.");
+      setNotice(undefined);
+      editor.setError(error instanceof Error ? error.message : "PDF export failed.");
     } finally {
-      setExporting(false);
+      setExportingPdf(false);
     }
+  }
+
+  async function exportPptx() {
+    if (!deck || exportingPptx) return;
+    setExportingPptx(true);
+    editor.setError(undefined);
+    setNotice("Consolidating fonts and preparing PowerPoint…");
+    try {
+      const before=await editor.flush();
+      if (!before) throw new Error("Save your pending edits before exporting.");
+      const result=await api.exportPptx(deck.id,before.revision);
+      if (result.summary.consolidated) editor.replaceDeck(result.deck,{previous:before});
+      else editor.adoptServerDeck(result.deck);
+      const anchor=document.createElement("a");
+      anchor.href=result.downloadUrl;anchor.download=result.filename;anchor.click();
+      setNotice(`PowerPoint ready · ${result.report.slides} slides · ${result.summary.consolidated} boxes consolidated`);
+    } catch(error) {
+      setNotice(undefined);
+      editor.setError(error instanceof Error ? error.message : "PowerPoint export failed.");
+    } finally {setExportingPptx(false);}
   }
 
   async function bake() {
@@ -158,6 +189,21 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
     }
   }
 
+  async function consolidateFonts(scope: "slide" | "deck") {
+    if (!deck || !activeSlide || consolidating) return;
+    setConsolidating(scope);
+    editor.setError(undefined);
+    try {
+      const before = await editor.flush();
+      if (!before) throw new Error("Save your pending edits before consolidating fonts.");
+      const { deck: next, summary } = await api.consolidateFonts(deck.id, before.revision, scope === "slide" ? [activeSlide.id] : undefined);
+      if (summary.consolidated) editor.replaceDeck(next, { previous: before });
+      setNotice(`${summary.consolidated} boxes consolidated · ${summary.alreadyUniform + summary.preserved + summary.skipped} unchanged`);
+    } catch (error) {
+      editor.setError(error instanceof Error ? error.message : "Fonts could not be consolidated.");
+    } finally { setConsolidating(undefined); }
+  }
+
   if (editor.loading || !deck || !activeSlide) {
     return (
       <main className="deck-page">
@@ -176,7 +222,7 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
   const accentStyle = { "--accent": deck.designSystem.colors.accent, "--accent-text": deck.designSystem.colors.accentText } as CSSProperties;
 
   return (
-    <main className="deck-page" style={accentStyle}>
+    <main className="deck-page" style={accentStyle} inert={Boolean(consolidating) || exportingPptx || exportingPdf} aria-busy={Boolean(consolidating) || exportingPptx || exportingPdf}>
       <header className="topbar">
         <Wordmark onClick={() => navigate({ name: "home" })} />
         <div className="topbar__title">
@@ -195,7 +241,14 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
           {pendingSlides.length > 0 && !recovering && config?.recovery.available && (
             <Button size="sm" onClick={() => void recover(pendingSlides.map((slide) => slide.id), true)}>Recover text ({pendingSlides.length})</Button>
           )}
-          <Button size="sm" disabled={exporting} onClick={() => void exportPng()}>Export PNG</Button>
+          <Button size="sm" disabled={exporting || exportingPdf || recovering || Boolean(repaintActive)} onClick={() => void exportPdf()} title="Download the entire deck as a PDF, preserving each slide’s appearance">
+            {exportingPdf ? "Preparing PDF…" : "Export PDF"}
+          </Button>
+          <Button size="sm" disabled={exporting || exportingPptx || recovering || Boolean(repaintActive) || !config?.pptxExport?.available || deck.slides.some(s=>!s.layers)}
+            onClick={() => void exportPptx()}
+            title={!config?.pptxExport?.available ? config?.pptxExport?.detail ?? "Loading export availability…" : deck.slides.some(s=>!s.layers) ? "Recover text on every slide first." : "Consolidate fonts, then export the deck with editable text and embedded fonts."}>
+            {exportingPptx ? "Preparing PowerPoint…" : "Export PPTX"}
+          </Button>
           <Button size="sm" disabled={exporting || !activeSlide.layers} onClick={() => void bake()} title="Save the current look as a new version of this slide">Bake</Button>
         </div>
       </header>
@@ -292,6 +345,11 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
               <dt>Text</dt><dd>{activeSlide.layers ? `${activeSlide.layers.objects.length} blocks` : recoveryLabel(activeSlide)}</dd>
               {activeSlide.recovery.providerRef && <><dt>Pipeline</dt><dd><code>{activeSlide.recovery.providerRef}</code></dd></>}
             </dl>
+            <Button size="sm" disabled={!activeSlide.layers || !config?.fontConsolidation?.available || recovering || Boolean(repaintActive)}
+              onClick={() => void consolidateFonts("slide")} title="Combine compatible fonts using saved text geometry. Usually a few seconds.">
+              {consolidating === "slide" ? "Consolidating…" : "Consolidate fonts"}
+            </Button>
+            <p className="panel__muted">{config?.fontConsolidation?.detail ?? "Uses the recovered text layout. Mixed formatting and text edits are preserved."}</p>
             {activeSlide.layers && config?.recovery.available && (
               <Button variant="quiet" size="sm" onClick={() => void recover([activeSlide.id], true, true)} title="Run the text pipeline again on this slide's current image (a few minutes)">Recover again</Button>
             )}
@@ -321,6 +379,10 @@ export function DeckPage({ deckId, slideId, config, navigate }: { deckId: string
               <dt>Sources</dt><dd>{deck.sources?.length ?? 0}</dd>
             </dl>
             <Button variant="quiet" size="sm" onClick={() => navigate({ name: "working", generationId: deck.id })}>How it was made</Button>
+            <Button size="sm" disabled={!deck.slides.some(slide => slide.layers) || !config?.fontConsolidation?.available || recovering || Boolean(repaintActive)}
+              onClick={() => void consolidateFonts("deck")} title="Consolidate compatible fonts on every recovered slide using saved text geometry.">
+              {consolidating === "deck" ? "Consolidating…" : "Consolidate deck fonts"}
+            </Button>
           </section>
         </aside>
       </div>

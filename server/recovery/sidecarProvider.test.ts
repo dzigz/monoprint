@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
 import sharp from 'sharp';
 import { SidecarRecoveryProvider } from './sidecarProvider.js';
 import type { RecoveryInput } from './provider.js';
@@ -26,7 +27,7 @@ test('offline reuse delivers the saved plate and exact layout, and rejects chang
     const report={status:'reviewed',revision:'reviewed',reviewed_revision:'reviewed'};
     await writeFile(path.join(doc,'design_report.json'),JSON.stringify(report));
     const fontRegistry={registerFittedFont:async()=>({id:'fitted',family:'Arial',subfamily:'Regular',weight:400,style:'normal',url:'font.ttf'})};
-    const provider=new SidecarRecoveryProvider({baseUrl:'http://127.0.0.1:1',runsDirectory:root,docPrefix:'test',reuseRuns:true,designAgent:true,fontRegistry:fontRegistry as any});
+    const provider=new SidecarRecoveryProvider({baseUrl:'http://127.0.0.1:1',runsDirectory:root,docPrefix:'test',reuseRuns:true,designAgent:true,consolidateFonts:false,fontRegistry:fontRegistry as any});
     provider.health=async()=>({available:false,detail:'offline test'});
     (provider as any).callReconstruct=async()=>{throw new Error('reconstruction required');};
     const input:RecoveryInput={deckId:'deck-123456',slideId:'slide',assetId:'asset',canvas:{width:80,height:40},imagePath:page,copy:[{role:'label',text:'test',fontRole:'label'}],colors:{} as any,
@@ -41,10 +42,52 @@ test('offline reuse delivers the saved plate and exact layout, and rejects chang
       assert.equal(result.objects[0].frame.x+word.baseline[0],12);
     }
     assert.deepEqual(await sharp(result.platePath).raw().toBuffer(),await sharp(image).raw().toBuffer());
+
+    // The default must not silently reuse a legacy unconsolidated result.
+    const defaults=new SidecarRecoveryProvider({baseUrl:'http://127.0.0.1:1',runsDirectory:root,docPrefix:'test',reuseRuns:true,designAgent:true,fontRegistry:fontRegistry as any});
+    defaults.health=provider.health;
+    (defaults as any).callReconstruct=async()=>{throw new Error('reconstruction required');};
+    await assert.rejects(defaults.recover(input),/reconstruction required/);
+    const request=JSON.parse(await readFile(path.join(doc,'request.json'),'utf8'));
+    await writeFile(path.join(doc,'request.json'),JSON.stringify({...request,consolidateFonts:true}));
+    await assert.rejects(defaults.recover(input),/requested font-consolidation setting/);
+    const consolidation=JSON.stringify({version:1,enabled:true,consolidated_blocks:0});
+    await writeFile(path.join(doc,'font_consolidation.json'),consolidation);
+    await writeFile(path.join(doc,'render_state.json'),JSON.stringify({...state,assets:{...state.assets,'font_consolidation.json':hash(consolidation)}}));
+    assert.equal((await defaults.recover(input)).diagnostics?.fontConsolidation,true);
+    await assert.rejects(provider.recover(input),/reconstruction required/);
+    await writeFile(path.join(doc,'font_consolidation.json'),'{}');
+    await assert.rejects(defaults.recover(input),/reconstruction required/);
+    await rm(path.join(doc,'font_consolidation.json'));
+    await writeFile(path.join(doc,'render_state.json'),JSON.stringify(state));
+    await writeFile(path.join(doc,'request.json'),JSON.stringify(request));
     await writeFile(path.join(doc,'design_overrides.json'),'{}');
     await assert.rejects(provider.recover(input),/reconstruction required/);
     await rm(path.join(doc,'design_overrides.json'));
     await writeFile(path.join(doc,'design_report.json'),JSON.stringify({...report,reviewed_revision:'previous'}));
     await assert.rejects(provider.recover(input),/reconstruction required/);
   } finally { await rm(root,{recursive:true,force:true}); }
+});
+
+test('reconstruct and rerender both send the default ON flag and an explicit OFF override', async () => {
+  const requests:Array<{path:string;body:any}>=[];
+  const server=createServer(async(req,res)=>{
+    const parts:Buffer[]=[];for await(const part of req) parts.push(part);
+    requests.push({path:req.url!,body:JSON.parse(Buffer.concat(parts).toString())});
+    res.setHeader('Content-Type','application/json');res.end('{}');
+  });
+  await new Promise<void>((resolve)=>server.listen(0,'127.0.0.1',resolve));
+  const address=server.address() as {port:number};
+  try {
+    for(const setting of [undefined,false]) {
+      const provider=new SidecarRecoveryProvider({baseUrl:`http://127.0.0.1:${address.port}`,runsDirectory:'/tmp',docPrefix:'test',reuseRuns:true,designAgent:true,consolidateFonts:setting,fontRegistry:{} as any});
+      const input={imagePath:'/tmp/image.png',deckId:'deck',signal:undefined} as RecoveryInput;
+      await (provider as any).callReconstruct(input,'test',{});
+      await (provider as any).callRerender(input,'test');
+      await (provider as any).dispatcher.close();
+    }
+    assert.deepEqual(requests.map(r=>[r.path,r.body.consolidateFonts]),[
+      ['/reconstruct',true],['/rerender',true],['/reconstruct',false],['/rerender',false],
+    ]);
+  } finally { await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve())); }
 });

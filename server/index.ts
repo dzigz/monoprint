@@ -20,6 +20,8 @@ import { FocusInputError, FocusRegionManager } from "./focusRegionManager.js";
 import { getOpenAIRequestTimeoutMs } from "./openaiClient.js";
 import { SidecarRecoveryProvider } from "./recovery/sidecarProvider.js";
 import { RecoveryManager } from "./recoveryManager.js";
+import { FontConsolidation, FontConsolidationError } from "./fontConsolidation.js";
+import { PptxExporter, PptxExportError } from "./pptxExport.js";
 import { RepaintManager } from "./repaint.js";
 import { validateRepositoryRoot } from "./repositoryTools.js";
 
@@ -51,10 +53,21 @@ const recoveryProvider = new SidecarRecoveryProvider({
   docPrefix: process.env.SIDECAR_DOC_PREFIX ?? "mp",
   reuseRuns: process.env.SIDECAR_REUSE_RUNS !== "0",
   designAgent: process.env.SIDECAR_DESIGN_AGENT !== "0",
+  consolidateFonts: !["0", "false", "off", "no"].includes((process.env.TEXT_FONT_CONSOLIDATION ?? "1").trim().toLowerCase()),
   fontRegistry: fonts,
 });
 const generations = new GenerationManager(store, fontCatalog.entries);
 const recovery = new RecoveryManager(store, mutations, fonts, recoveryProvider);
+const fontConsolidation = new FontConsolidation(store, mutations, fonts, {
+  projectRoot,
+  enabled: !["0", "false", "off", "no"].includes((process.env.TEXT_FONT_CONSOLIDATION ?? "1").trim().toLowerCase()),
+  pipelineRoot: process.env.SIDECAR_ROOT,
+  python: process.env.SIDECAR_PYTHON,
+});
+const pptxExporter = new PptxExporter(store, fontConsolidation, {
+  projectRoot, runtimeRoot: process.env.PPTX_RUNTIME_ROOT,
+  pipelineRoot: process.env.SIDECAR_ROOT, python: process.env.SIDECAR_PYTHON,
+});
 const repaints = new RepaintManager(store, mutations, async (deckId, slideId) => {
   await recovery.enqueue(deckId, [slideId], { force: true });
 });
@@ -90,13 +103,15 @@ function errorMessage(error: unknown, fallback: string) {
 // ----------------------------------------------------------------- config
 
 app.get("/api/config", async (_request, response) => {
-  const health = await recoveryProvider.health();
+  const [health, consolidationHealth, pptxHealth] = await Promise.all([recoveryProvider.health(), fontConsolidation.health(), pptxExporter.health()]);
   response.json({
     generationConfigured: Boolean(process.env.OPENAI_API_KEY),
     fontCatalogSize: fontCatalog.entries.length,
     fontSourceLabel,
     openAIRequestTimeoutMs: getOpenAIRequestTimeoutMs(),
     recovery: { provider: recoveryProvider.name, available: health.available, detail: health.detail },
+    fontConsolidation: consolidationHealth,
+    pptxExport: pptxHealth,
     platform: process.platform,
   });
 });
@@ -205,6 +220,43 @@ app.get("/api/decks/:deckId/events", async (request, response) => {
 });
 
 // --------------------------------------------------------------- recovery
+
+const consolidationBodySchema = z.object({
+  slideIds: z.array(z.string().min(1)).min(1).max(200).optional(),
+  expectedRevision: z.number().int().nonnegative(),
+});
+app.post("/api/decks/:deckId/consolidate-fonts", async (request, response) => {
+  try {
+    const body = consolidationBodySchema.parse(request.body);
+    const repaint = repaints.job(request.params.deckId);
+    if (repaint?.status === "running" || repaint?.status === "queued") throw new FontConsolidationError("Wait for the repaint to finish before consolidating fonts.");
+    response.json(await fontConsolidation.run(request.params.deckId, body.slideIds, body.expectedRevision));
+  } catch (error) {
+    const status = error instanceof FontConsolidationError ? error.status : error instanceof z.ZodError ? 400 : 500;
+    response.status(status).json({ error: errorMessage(error, "Fonts could not be consolidated.") });
+  }
+});
+
+app.post("/api/decks/:deckId/pptx", async (request, response) => {
+  try {
+    const body=z.object({expectedRevision:z.number().int().nonnegative()}).parse(request.body);
+    const repaint=repaints.job(request.params.deckId);
+    if (repaint?.status==="running" || repaint?.status==="queued") throw new PptxExportError("Wait for the repaint to finish before exporting.");
+    response.json(await pptxExporter.run(request.params.deckId,body.expectedRevision));
+  } catch(error) {
+    const status=error instanceof PptxExportError || error instanceof FontConsolidationError ? error.status : error instanceof z.ZodError ? 400 : 500;
+    response.status(status).json({error:errorMessage(error,"PowerPoint export failed.")});
+  }
+});
+
+app.get("/api/decks/:deckId/pptx/:exportId", async (request, response) => {
+  try {
+    const {file,filename}=await pptxExporter.download(request.params.deckId,request.params.exportId);
+    response.download(file,filename);
+  } catch(error) {
+    response.status(error instanceof PptxExportError ? error.status : 500).json({error:errorMessage(error,"Export not found.")});
+  }
+});
 
 app.post("/api/decks/:deckId/recovery", async (request, response) => {
   try {

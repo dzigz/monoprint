@@ -33,6 +33,8 @@ export const api = {
   bake: (deckId: string, slideId: string, image: string) => request<{ deck: Deck; assetUrl: string }>(`/api/decks/${deckId}/slides/${slideId}/bake`, { method: "POST", body: JSON.stringify({ image }) }),
   focusRegions: (deckId: string, slideId: string, inputKey: string, options: { image?: string; retry?: boolean } = {}) => request<{ deck: Deck }>(`/api/decks/${deckId}/slides/${slideId}/focus-regions`, { method: "POST", body: JSON.stringify({ inputKey, ...options }) }),
   startRecovery: (deckId: string, slideIds?: string[], force = false, fresh = false) => request<{ job: RecoveryJob }>(`/api/decks/${deckId}/recovery`, { method: "POST", body: JSON.stringify({ slideIds, force, fresh }) }),
+  consolidateFonts: (deckId: string, expectedRevision: number, slideIds?: string[]) => request<{ deck: Deck; summary: import("../shared/types").FontConsolidationSummary }>(`/api/decks/${deckId}/consolidate-fonts`, { method: "POST", body: JSON.stringify({ slideIds, expectedRevision }) }),
+  exportPptx: (deckId: string, expectedRevision: number) => request<{ deck: Deck; summary: import("../shared/types").FontConsolidationSummary; report: import("../shared/types").PptxExportReport; downloadUrl: string; filename: string }>(`/api/decks/${deckId}/pptx`, { method: "POST", body: JSON.stringify({ expectedRevision }) }),
   cancelRecovery: (deckId: string) => request<{ job?: RecoveryJob }>(`/api/decks/${deckId}/recovery/cancel`, { method: "POST", body: "{}" }),
   generate: (body: { prompt: string; attachments: unknown[] }) => request<{ generation: GenerationRecord }>("/api/generate", { method: "POST", body: JSON.stringify(body) }),
   generation: (generationId: string) => request<{ generation: GenerationRecord }>(`/api/generations/${generationId}`),

@@ -22,6 +22,8 @@ export type SidecarProviderOptions = {
   docPrefix: string;
   reuseRuns: boolean;
   designAgent: boolean;
+  /** Default ON. Selects canonical consolidation in the Python renderer. */
+  consolidateFonts?: boolean;
   fontRegistry: FontRegistry;
 };
 
@@ -117,6 +119,8 @@ export class SidecarRecoveryProvider implements SlideRecoveryProvider {
 
   constructor(private readonly options: SidecarProviderOptions) {}
 
+  private get consolidateFonts() { return this.options.consolidateFonts ?? true; }
+
   private inFlight = 0;
 
   /**
@@ -188,6 +192,7 @@ export class SidecarRecoveryProvider implements SlideRecoveryProvider {
           docName,
           known,
           designAgent: this.options.designAgent,
+          consolidateFonts: this.consolidateFonts,
         }),
         signal: controller.signal,
         dispatcher: this.dispatcher,
@@ -215,7 +220,7 @@ export class SidecarRecoveryProvider implements SlideRecoveryProvider {
       const response = await undiciFetch(`${this.options.baseUrl}/rerender`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ docName, edits: {} }),
+        body: JSON.stringify({ docName, edits: {}, consolidateFonts: this.consolidateFonts }),
         signal: controller.signal,
         dispatcher: this.dispatcher,
       });
@@ -252,8 +257,10 @@ export class SidecarRecoveryProvider implements SlideRecoveryProvider {
   }
 
   private async requestMatches(docDirectory: string, input: RecoveryInput, known: KnownPayload) {
-    const request = await readJson<{ image: string; known: KnownPayload; fonts: Record<string, string>; deck: string; designAgent: boolean }>(path.join(docDirectory, "request.json"));
+    const request = await readJson<{ image: string; known: KnownPayload; fonts: Record<string, string>; deck: string; designAgent: boolean; consolidateFonts?: boolean }>(path.join(docDirectory, "request.json"));
     if (!request || request.deck !== input.deckId.slice(0,8) || request.designAgent !== this.options.designAgent || stableJson(request.known) !== stableJson(known)) return false;
+    // Runs created before this feature contain the unconsolidated layout.
+    if ((request.consolidateFonts ?? false) !== this.consolidateFonts) return false;
     if (request.image !== createHash("sha256").update(await readFile(input.imagePath)).digest("hex")) return false;
     for (const [file, hash] of Object.entries(request.fonts ?? {})) {
       if (!(await exists(file)) || createHash("sha256").update(await readFile(file)).digest("hex") !== hash) return false;
@@ -262,6 +269,11 @@ export class SidecarRecoveryProvider implements SlideRecoveryProvider {
   }
 
   private async resolvedResult(input: RecoveryInput, docDirectory: string, textLayer: SidecarTextLayer, reused: boolean): Promise<RecoveryResult> {
+    const consolidation = await readJson<{ version: number; enabled: boolean; consolidated_blocks: number }>(path.join(docDirectory, "font_consolidation.json"));
+    if ((this.consolidateFonts && (consolidation?.version !== 1 || !consolidation.enabled))
+        || (!this.consolidateFonts && consolidation?.enabled)) {
+      throw new Error("The pipeline did not apply the requested font-consolidation setting. Update and restart the sidecar, then recover again.");
+    }
     const layout = textLayer.resolved!;
     const registered = new Map<string, DeckFont>();
     for (const [key, rec] of Object.entries(layout.fonts)) {
@@ -280,7 +292,8 @@ export class SidecarRecoveryProvider implements SlideRecoveryProvider {
     await sharp(path.join(docDirectory, "match_A_plate.png")).resize(input.canvas.width, input.canvas.height, { fit: "fill" }).png().toFile(platePath);
     const objects = objectsFromResolved(layout, registered, input.canvas, textLayer.revision!);
     return { platePath, objects, fonts: [...registered.values()], provider: this.name, providerRef: path.basename(docDirectory),
-      diagnostics: { reused, docDirectory, revision: textLayer.revision, words: Object.keys(layout.words).length, layoutSchema: layout.schema, plateFilledPixels: 0 } };
+      diagnostics: { reused, docDirectory, revision: textLayer.revision, words: Object.keys(layout.words).length, layoutSchema: layout.schema, plateFilledPixels: 0,
+        fontConsolidation: this.consolidateFonts, consolidatedBlocks: consolidation?.consolidated_blocks ?? 0 } };
   }
 
   async recover(input: RecoveryInput): Promise<RecoveryResult> {

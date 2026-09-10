@@ -1,4 +1,5 @@
 import type { Deck, Slide } from "./types.js";
+import { focusInputKey } from "./focusRegions.js";
 
 /**
  * Combine a deck carrying local edits with the server's latest copy. Local
@@ -27,5 +28,14 @@ export function mergeServerDeck(local: Deck, server: Deck): Deck {
   const assets = [...local.assets, ...server.assets.filter((asset) => !assetIds.has(asset.id))];
   const fontIds = new Set(local.fonts.map((font) => font.id));
   const fonts = [...local.fonts, ...server.fonts.filter((font) => !fontIds.has(font.id))];
-  return { ...local, slides, assets, fonts, revision: Math.max(local.revision, server.revision) };
+  const merged = { ...local, slides, assets, fonts, revision: Math.max(local.revision, server.revision) };
+  // Undo may restore geometry with its own cached highlights. Keep whichever
+  // cache actually describes the merged slide instead of invalidating it.
+  merged.slides = merged.slides.map(slide => {
+    const key = focusInputKey(merged, slide);
+    if (slide.focusRegions?.inputKey === key) return slide;
+    const previous = local.slides.find(candidate => candidate.id === slide.id)?.focusRegions;
+    return previous?.inputKey === key ? { ...slide, focusRegions: previous } : slide;
+  });
+  return merged;
 }

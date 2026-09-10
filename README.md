@@ -21,6 +21,18 @@ The slide count comes from the prompt when you write one ("12 slides", "a ten-sl
 
 The deck document is the source of truth. Slides keep a version history: generated, repainted, and baked rasters. Hand edits and prompt edits use the same command format, so undo, autosave, and the live event stream behave identically.
 
+**Export PDF** downloads the entire deck, with one page per slide in deck order. It saves pending edits, captures the actual editor slide component at twice its native dimensions, and embeds each image losslessly. This preserves recovered fonts and browser text reflow without requiring fonts in the PDF reader. Selection handles, hover highlights and editor controls are excluded. Pages preserve each slide's aspect ratio, including unrecovered slides. This is a visual PDF (text is part of the page image); use Export PPTX for editable text. PDF export runs in the browser without recovery, consolidation or model calls.
+
+**Font consolidation.** Recovery defaults to using one fitted font per eligible multiline text box. After fitting, the pipeline chooses an existing font that changes the box's overall horizontal extent by at most 2%, measured using renderer glyph bounds, recovered word gaps, baseline positions and rotation. It preserves sizes, colours, line breaks and alignment. Boxes with mixed fonts on a line, differing typefaces/weights/styles, excessive width change, or incompatible geometry retain their original font runs. Boxes are never split. The reviewed render and imported text objects use this same layout. The original fitted layout is retained in the run directory.
+
+For existing decks, use **Consolidate fonts** under **This slide**, or **Consolidate deck fonts** under **Deck**. These actions run the same deterministic rule directly on saved editor word geometry and local font files, in a separate short-lived Python process. They work while the HTTP recovery service is offline and do not run OCR, refitting, design review, or external models. Boxes without saved geometry (including text edits that have reflowed), locked boxes and incompatible transforms are preserved. Existing valid talking-point highlights are reused; missing highlights require an explicit retry. Undo restores the previous text objects and highlight cache. Slide images and pipeline run folders are not rewritten.
+
+**Export PPTX** in the deck toolbar saves pending edits, runs font consolidation across the entire deck, then exports that consolidated snapshot. Compatible boxes remain native multiline text; complex runs retain their fitted fonts, positions, colors and rotations in separate editable objects. The recovered background stays an image, and talking points become speaker notes. Full fonts are embedded under unique family names, including converting CFF outlines to TrueType for PowerPoint. Export stops if consolidation, a required font/background, or editable embedding is unavailable. It does not run text recovery or call a model. Consolidation changes are saved only after export succeeds and can be undone in the app.
+
+The local exporter uses the prepared Python environment and the Codex presentation runtime (`PPTX_RUNTIME_ROOT`, default `~/.cache/codex-runtimes/codex-primary-runtime/dependencies`). All slides must have recovered text layers. Validated in PowerPoint for Mac 16.112.3 against all 13 consolidated Super-resolution slides: complete text, embedded fonts and unchanged artwork; 95% of measured word anchors within 0.9 px horizontally and 2.1 px vertically at 1536×864. This is close visual fidelity, not a guarantee of identical pixels across PowerPoint versions. PowerPoint may render ligatures and antialiasing differently; text that has reflowed in the editor is laid out again during export.
+
+Set `TEXT_FONT_CONSOLIDATION=0` in `.env.local` and restart to disable both automatic consolidation and the manual actions. Turning the flag on or off does not rewrite already saved decks. Recovery cache reuse checks the setting and the output report. The width tolerance does not bound changes to shorter lines or replace the editor's existing browser reflow behavior during direct text edits.
+
 ## Setup
 
 The prepared main checkout at `~/Documents/monoprint` starts both services with `npm run local`. See [the local runtime guide](docs/local-runtime.md) for the pinned pipeline revision, dependency snapshots and further development.
@@ -55,11 +67,14 @@ That script expects the pipeline worktree at `~/Documents/font_matching_proto` a
 | `SIDECAR_DESIGN_AGENT` | `1` | Let the pipeline's design agent refine each slide (slower, better) |
 | `SIDECAR_DESIGN_AGENT_MODE` | `aesthetic` | Design-agent variant passed to `npm run sidecar` (`aesthetic` or `overlay`) |
 | `SIDECAR_PORT` | `4174` | Port `npm run sidecar` listens on |
+| `TEXT_FONT_CONSOLIDATION` | `1` | Consolidate compatible fitted fonts within each recovered box using the 2% overall-width limit; `0` disables it |
 | `OPENAI_TIMEOUT_MS` | `1200000` | Timeout for long model calls |
 
 ## Recovery adapter
 
-`server/recovery/provider.ts` is the contract: image in, plate and objects out. `server/recovery/sidecarProvider.ts` implements it against the sidecar. It sends the deck's role fonts and role-labelled copy as known typography, then reads the sidecar's run directory for sizes, spacing, fitted fonts, and the composite images. The adapter imports the reviewed background plate and canonical resolved text layout directly, so the editor and export use the same geometry as the pipeline. Nothing in the pipeline repository is modified.
+`server/recovery/provider.ts` is the contract: image in, plate and objects out. `server/recovery/sidecarProvider.ts` implements it against the sidecar. It sends the deck's role fonts and role-labelled copy as known typography, then reads the sidecar's run directory for sizes, spacing, fitted fonts, and the composite images. The adapter imports the reviewed background plate and canonical resolved text layout directly, so the editor and export use the same geometry as the pipeline. Font fitting and consolidation happen in the pipeline; the adapter does not perform a second layout pass.
+
+Text removal fills the source text mask with the surrounding background color when local samples agree. Each word samples its own background, excluding nearby text; gradients, textures and color boundaries retain the inpainting fallback. Pixels outside the text mask stay unchanged. Existing saved backgrounds receive this change when their slides are recovered again.
 
 Objects are a discriminated union (`kind: "text"` today) so images, shapes, and charts can join later without changing the host.
 

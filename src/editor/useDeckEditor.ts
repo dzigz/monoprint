@@ -41,7 +41,7 @@ export function useDeckEditor(deckId: string) {
 
   const flush = useCallback(async () => {
     const commands = pendingRef.current;
-    if (!commands.length || !deckRef.current) return;
+    if (!commands.length || !deckRef.current) return deckRef.current;
     pendingRef.current = [];
     setSaving(true);
     try {
@@ -52,6 +52,7 @@ export function useDeckEditor(deckId: string) {
         return mergeServerDeck(rebased, saved);
       });
       setError(undefined);
+      return saved;
     } catch (saveError) {
       pendingRef.current = [...commands, ...pendingRef.current];
       setError(saveError instanceof Error ? saveError.message : "Changes could not be saved.");
@@ -114,10 +115,10 @@ export function useDeckEditor(deckId: string) {
     });
   }, [scheduleSave]);
 
-  const replaceDeck = useCallback((next: Deck, { record = true }: { record?: boolean } = {}) => {
+  const replaceDeck = useCallback((next: Deck, { record = true, previous }: { record?: boolean; previous?: Deck } = {}) => {
     setDeck((current) => {
       if (record && current) {
-        pastRef.current = [...pastRef.current.slice(-MAX_HISTORY + 1), current];
+        pastRef.current = [...pastRef.current.slice(-MAX_HISTORY + 1), previous ?? current];
         futureRef.current = [];
         setHistoryVersion((version) => version + 1);
       }
