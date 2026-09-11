@@ -1,5 +1,5 @@
-// Recovery provider backed by the font_matching_proto text-layer sidecar
-// (branch proto/font-matching). The sidecar runs OCR, known-typography
+// Recovery provider backed by the pinned text-layer pipeline sidecar.
+// The sidecar runs OCR, known-typography
 // matching, measured fitting, and compositing; this adapter feeds it the
 // deck's known fonts and copy, then reads its run directory to assemble
 // editable objects. Nothing in the sidecar repo is modified.

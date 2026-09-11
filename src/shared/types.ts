@@ -284,6 +284,7 @@ export type DeckAsset = {
   slideId: string;
   url: string;
   prompt: string;
+  sourceVisuals?: { visualId: string; attachmentId: string; locator: string; instruction: string }[];
   copy: SlideCopyItem[];
   alt: string;
   width?: number;

@@ -30,6 +30,7 @@ const projectRoot = process.cwd();
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 
 const port = Number(process.env.PORT ?? 4175);
+const pipelineRoot = path.resolve(process.env.SIDECAR_ROOT ?? path.join(projectRoot, ".local/pipeline"));
 const artifactsRoot = path.resolve(process.env.ARTIFACTS_ROOT ?? path.join(projectRoot, "artifacts"));
 const configuredFontLibrary = process.env.FONT_LIBRARY_PATH?.trim();
 const fontLibraryRoots = configuredFontLibrary
@@ -49,7 +50,7 @@ const focusRegions = new FocusRegionManager(store, mutations);
 mutations.onDeckChanged((deck) => focusRegions.schedule(deck.id));
 const recoveryProvider = new SidecarRecoveryProvider({
   baseUrl: process.env.TEXT_LAYER_SIDECAR_URL ?? "http://127.0.0.1:4174",
-  runsDirectory: path.resolve(process.env.SIDECAR_RUNS_DIR ?? path.join(homedir(), "Documents/font_matching_proto/runs/docedit/v4")),
+  runsDirectory: path.resolve(process.env.SIDECAR_RUNS_DIR ?? path.join(pipelineRoot, "runs/docedit/v4")),
   docPrefix: process.env.SIDECAR_DOC_PREFIX ?? "mp",
   reuseRuns: process.env.SIDECAR_REUSE_RUNS !== "0",
   designAgent: process.env.SIDECAR_DESIGN_AGENT !== "0",
@@ -61,12 +62,12 @@ const recovery = new RecoveryManager(store, mutations, fonts, recoveryProvider);
 const fontConsolidation = new FontConsolidation(store, mutations, fonts, {
   projectRoot,
   enabled: !["0", "false", "off", "no"].includes((process.env.TEXT_FONT_CONSOLIDATION ?? "1").trim().toLowerCase()),
-  pipelineRoot: process.env.SIDECAR_ROOT,
+  pipelineRoot,
   python: process.env.SIDECAR_PYTHON,
 });
 const pptxExporter = new PptxExporter(store, fontConsolidation, {
   projectRoot, runtimeRoot: process.env.PPTX_RUNTIME_ROOT,
-  pipelineRoot: process.env.SIDECAR_ROOT, python: process.env.SIDECAR_PYTHON,
+  pipelineRoot, python: process.env.SIDECAR_PYTHON,
 });
 const repaints = new RepaintManager(store, mutations, async (deckId, slideId) => {
   await recovery.enqueue(deckId, [slideId], { force: true });

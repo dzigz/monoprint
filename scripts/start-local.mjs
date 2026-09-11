@@ -12,6 +12,7 @@ const env = { ...settings, ...process.env };
 const pipeline = path.join(root, ".local/pipeline");
 const python = path.join(root, ".local/python/bin/python");
 const wrapper = path.join(pipeline, "scripts/matching/python.sh");
+const sidecarOnly = process.argv.includes("--sidecar-only");
 
 if (process.versions.node !== lock.node) {
   throw new Error(`Expected Node ${lock.node}; run npm run local with the prepared runtime.`);
@@ -76,9 +77,14 @@ const done = new Promise((resolve) => {
       let ready = false;
       try { ready = (await fetch(`${sidecarUrl}/health`, { signal: AbortSignal.timeout(500) })).ok; } catch { /* still starting */ }
       if (ready && !stopping) {
+        if (sidecarOnly) {
+          console.log(`Pipeline ready at ${sidecarUrl}. Ctrl+C stops it.`);
+          return;
+        }
         start("Monoprint", process.execPath, [path.join(root, "node_modules/tsx/dist/cli.mjs"), "watch", "server/index.ts"], {
           cwd: root,
-          env: { ...env, NODE_ENV: "development", PORT: appPort, TEXT_LAYER_SIDECAR_URL: sidecarUrl, SIDECAR_RUNS_DIR: path.join(pipeline, "runs/docedit/v4") },
+          env: { ...env, NODE_ENV: "development", PORT: appPort, TEXT_LAYER_SIDECAR_URL: sidecarUrl,
+            SIDECAR_ROOT: pipeline, SIDECAR_PYTHON: python, SIDECAR_RUNS_DIR: path.join(pipeline, "runs/docedit/v4") },
         });
         console.log(`Open http://localhost:${appPort}. Ctrl+C stops both services.`);
         return;

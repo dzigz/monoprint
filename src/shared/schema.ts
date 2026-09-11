@@ -153,6 +153,7 @@ const deckAssetSchema = z.object({
   slideId: z.string().min(1),
   url: z.string().min(1),
   prompt: z.string(),
+  sourceVisuals: z.array(z.object({ visualId: z.string().min(1), attachmentId: z.string().min(1), locator: z.string(), instruction: z.string().min(1) })).optional(),
   copy: z.array(slideCopyItemSchema.partial({ fontRole: true })),
   alt: z.string(),
   width: z.number().int().positive().optional(),

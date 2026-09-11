@@ -2,6 +2,7 @@
 // Usage: npx tsx scripts/recovery-smoke.ts <deckId> [slideIndex]
 import path from "node:path";
 import { homedir } from "node:os";
+import dotenv from "dotenv";
 import { DeckMutations } from "../server/deckMutations.js";
 import { DeckStore } from "../server/deckStore.js";
 import { loadFontCatalog } from "../server/fontCatalog.js";
@@ -9,20 +10,22 @@ import { FontRegistry } from "../server/fonts.js";
 import { SidecarRecoveryProvider } from "../server/recovery/sidecarProvider.js";
 import { RecoveryManager } from "../server/recoveryManager.js";
 
+dotenv.config({ path: path.resolve(".env.local") });
 const [deckId, slideIndexArg] = process.argv.slice(2);
 if (!deckId) throw new Error("deckId required");
 const slideIndex = Number(slideIndexArg ?? 0);
-const artifactsRoot = path.resolve("artifacts");
+const artifactsRoot = path.resolve(process.env.ARTIFACTS_ROOT ?? "artifacts");
+const pipelineRoot = path.resolve(process.env.SIDECAR_ROOT ?? ".local/pipeline");
 const catalog = await loadFontCatalog(["/System/Library/Fonts", "/System/Library/Fonts/Supplemental", "/Library/Fonts", path.join(homedir(), "Library/Fonts")]);
 const fonts = new FontRegistry(catalog, artifactsRoot);
 const store = new DeckStore(artifactsRoot);
 const mutations = new DeckMutations(store, fonts);
 const provider = new SidecarRecoveryProvider({
-  baseUrl: "http://127.0.0.1:4174",
-  runsDirectory: path.join(homedir(), "Documents/font_matching_proto/runs/docedit/v4"),
-  docPrefix: process.env.SIDECAR_DOC_PREFIX ?? "kn",
-  reuseRuns: true,
-  designAgent: true,
+  baseUrl: process.env.TEXT_LAYER_SIDECAR_URL ?? "http://127.0.0.1:4174",
+  runsDirectory: path.resolve(process.env.SIDECAR_RUNS_DIR ?? path.join(pipelineRoot, "runs/docedit/v4")),
+  docPrefix: process.env.SIDECAR_DOC_PREFIX ?? "mp",
+  reuseRuns: process.env.SIDECAR_REUSE_RUNS !== "0",
+  designAgent: process.env.SIDECAR_DESIGN_AGENT !== "0",
   consolidateFonts: !["0", "false", "off", "no"].includes((process.env.TEXT_FONT_CONSOLIDATION ?? "1").trim().toLowerCase()),
   fontRegistry: fonts,
 });

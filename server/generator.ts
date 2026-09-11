@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -13,7 +12,6 @@ import {
   webSearchTool,
   type AgentInputItem,
 } from "@openai/agents";
-import { toFile } from "openai";
 import { z } from "zod";
 import {
   CODEBASE_PRESENTATION_GUIDANCE,
@@ -55,7 +53,7 @@ import { DeckStore } from "./deckStore.js";
 import { imageDimensions } from "./recovery/plate.js";
 import { fontCatalogForPrompt } from "./fontCatalog.js";
 import { getOpenAIClient } from "./openaiClient.js";
-import { SLIDE_IMAGE_SETTINGS } from "./slideImageSettings.js";
+import { requestSlideImage, sourceVisualSelectionSchema, type SourceVisualSelection, type SourceVisualInput } from "./slideImageRequest.js";
 import {
   createRepositoryTools,
   isRepositoryToolName,
@@ -184,21 +182,6 @@ function createConcurrencyGate(limit: number) {
   };
 }
 
-function fullSlidePrompt(prompt: string, styleReferenceCount: number) {
-  return [
-    "Create one complete, polished presentation slide as a single full-bleed landscape image.",
-    "This is the actual slide artwork, not a slide shown inside a mockup, screen, device, editor, or room.",
-    "Compose across the full native 1536x864 (16:9) canvas. Keep essential words and visuals within comfortable slide-safe margins; the viewer will preserve the entire image without cropping.",
-    "Treat the slide as editorial information design: the visual structure and exact words must together communicate a specific relationship, mechanism, comparison, change, piece of evidence, or consequence. Make the focal idea immediately recoverable and keep supporting context quiet.",
-    "Do not add generic AI-presentation styling such as automatic dark-neon technology aesthetics, glowing networks or orbs, glassmorphism, floating 3D icons, decorative data particles, arbitrary gradients, or dashboard-card grids unless the production specification gives that device a necessary content-specific role.",
-    styleReferenceCount > 0
-      ? `The ${styleReferenceCount === 1 ? "input image is" : `${styleReferenceCount} input images are`} earlier slide artwork supplied only as ${styleReferenceCount === 1 ? "a" : "the"} deck-level style reference. Preserve the established typography character, palette, background treatment, medium, texture, line quality, and recurring visual grammar. Do not copy or retain reference-slide wording, data, subject matter, objects, or layout; create the new slide specified below.`
-      : undefined,
-    "Render typography cleanly and exactly as specified. Add no unrequested text, logos, watermarks, page furniture, or UI chrome.",
-    prompt,
-  ].filter(Boolean).join("\n\n");
-}
-
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;
@@ -252,7 +235,7 @@ export async function generateDeck({
       .filter((url) => !request.attachments.some((attachment) => attachment.kind === "link" && attachment.url === url))
       .map((url) => ({ id: `link-${createHashId(url)}`, kind: "link" as const, name: new URL(url).hostname, url })),
   ];
-  const library = new AttachmentLibrary(attachments);
+  const library = new AttachmentLibrary(attachments, signal);
   const attachmentIds = new Set(attachments.filter((attachment) => attachment.kind === "file").map((attachment) => attachment.id));
   const observedFileAndLinkSources = new Map<string, DeckSource>();
   let inferredAudience: string | undefined;
@@ -299,7 +282,7 @@ export async function generateDeck({
     }
     assetBySlideNumber.set(asset.slideNumber, asset);
   }
-  const pendingBySlideId = new Map<string, { slideNumber: number; promise: Promise<string> }>();
+  const pendingBySlideId = new Map<string, { slideNumber: number; sourceVisuals?: SourceVisualSelection[]; promise: Promise<string> }>();
   const pendingSlideIdByNumber = new Map<number, string>();
   const runImageGeneration = createConcurrencyGate(MAX_PARALLEL_SLIDE_IMAGES);
   const firstSlideReady = createDeferred<DeckAsset>();
@@ -522,41 +505,13 @@ export async function generateDeck({
     return path.join(outputDirectory, fileName);
   }
 
-  async function requestSlideImage(prompt: string, styleReferences: DeckAsset[]) {
-    const completePrompt = fullSlidePrompt(prompt, styleReferences.length);
-    return runImageGeneration(() => retryTransientCall(async () => {
-      throwIfAborted(signal);
-      if (styleReferences.length === 0) {
-        return openai.images.generate({
-          ...SLIDE_IMAGE_SETTINGS,
-          prompt: completePrompt,
-          size: "1536x864",
-          output_format: "png",
-        }, { signal });
-      }
-
-      const referenceImages = await Promise.all(styleReferences.map(async (asset) => {
-        throwIfAborted(signal);
-        const referencePath = assetFilePath(asset);
-        return toFile(createReadStream(referencePath), path.basename(referencePath), { type: "image/png" });
-      }));
-      throwIfAborted(signal);
-      return openai.images.edit({
-        ...SLIDE_IMAGE_SETTINGS,
-        image: referenceImages,
-        prompt: completePrompt,
-        size: "1536x864",
-        output_format: "png",
-      }, { signal });
-    }, signal));
-  }
-
   async function generateSlide(
     slideNumber: number,
     slideId: string,
     prompt: string,
     copy: SlideCopyItem[],
     alt: string,
+    selectedVisuals?: SourceVisualSelection[],
   ) {
     try {
       throwIfAborted(signal);
@@ -575,6 +530,9 @@ export async function generateDeck({
         throw new Error(`Slide number ${slideNumber} already belongs to ${existingForNumber.slideId}.`);
       }
       if (existing) {
+        if (selectedVisuals !== undefined && JSON.stringify(selectedVisuals) !== JSON.stringify((existing.sourceVisuals ?? []).map(({ visualId, instruction }) => ({ visualId, instruction })))) {
+          throw new Error(`Slide ${slideId} was already generated with different source visuals.`);
+        }
         if (existing.slideNumber !== undefined && existing.slideNumber !== slideNumber) {
           throw new Error(`Slide ${slideId} was already generated as slide number ${existing.slideNumber}.`);
         }
@@ -616,6 +574,12 @@ export async function generateDeck({
         });
       }
 
+      const sourceVisuals: SourceVisualInput[] = [];
+      for (const selected of selectedVisuals ?? []) {
+        const visual = await library.visuals.prepare(selected.visualId);
+        observedFileAndLinkSources.set(visual.source.id, visual.source);
+        sourceVisuals.push({ ...visual, instruction: selected.instruction });
+      }
       const expectedStyleReferenceCount = Math.min(Math.max(slideNumber - 1, 0), STYLE_ANCHOR_SLIDES);
       await onProgress({
         phase: "generating_image",
@@ -647,7 +611,9 @@ export async function generateDeck({
 
       const assetId = randomUUID();
       const fileName = `${assetId}.png`;
-      const response = await requestSlideImage(productionPrompt, styleReferences);
+      const response = await runImageGeneration(() => retryTransientCall(() => requestSlideImage(
+        openai.images, productionPrompt, styleReferences.map(assetFilePath), sourceVisuals, signal,
+      ), signal));
       throwIfAborted(signal);
       const encoded = response.data?.[0]?.b64_json;
       if (!encoded) throw new Error(`Image generation returned no data for slide ${slideId}.`);
@@ -666,6 +632,7 @@ export async function generateDeck({
         slideId,
         url: `/api/assets/${deckId}/${fileName}`,
         prompt: productionPrompt,
+        sourceVisuals: sourceVisuals.map(({ id, attachmentId, locator, instruction }) => ({ visualId: id, attachmentId, locator, instruction })),
         copy,
         alt,
         width: dimensions.width,
@@ -694,6 +661,7 @@ export async function generateDeck({
         slideId,
         slideNumber,
         styleReferenceCount: styleReferences.length,
+        sourceVisuals: asset.sourceVisuals,
         reused: false,
       });
     } catch (error) {
@@ -823,10 +791,12 @@ export async function generateDeck({
       copy: slideCopySchema.describe("Every exact reader-visible string in reading order. Each item must have a specific production role label. Do not put role labels inside text."),
       prompt: z.string().min(1).describe("Self-contained, content-first production specification for the complete slide: intended change in understanding, exact propositions and evidence, explanatory relationships, composition and hierarchy, approved fonts and palette, content-derived image treatment, continuity, and explicit omissions. Refer to copy items by role when explaining placement or hierarchy, but do not duplicate the visible-copy list; the service appends it canonically."),
       alt: z.string().min(1).describe("Concise accessible description that states the slide's substantive claim and important visual relationship."),
+      sourceVisuals: sourceVisualSelectionSchema.optional().describe("Selected uploaded/document visual IDs from list_attachment_visuals or view_attachment_visual, each with its intended use. Their actual image pixels are passed to the image model alongside your prompt. Earlier-slide style anchors are added separately by the service."),
     }),
-    async execute({ slideNumber, slideId, copy, prompt, alt }) {
+    async execute({ slideNumber, slideId, copy, prompt, alt, sourceVisuals }) {
       const pending = pendingBySlideId.get(slideId);
       if (pending) {
+        if (JSON.stringify(pending.sourceVisuals ?? []) !== JSON.stringify(sourceVisuals ?? [])) throw new Error(`Slide ${slideId} is pending with different source visuals.`);
         if (pending.slideNumber !== slideNumber) {
           throw new Error(`Slide ${slideId} is already pending as slide number ${pending.slideNumber}.`);
         }
@@ -838,8 +808,8 @@ export async function generateDeck({
         throw new Error(`Slide number ${slideNumber} is already pending for ${pendingSlideId}.`);
       }
 
-      const task = generateSlide(slideNumber, slideId, prompt, copy, alt);
-      pendingBySlideId.set(slideId, { slideNumber, promise: task });
+      const task = generateSlide(slideNumber, slideId, prompt, copy, alt, sourceVisuals);
+      pendingBySlideId.set(slideId, { slideNumber, sourceVisuals, promise: task });
       pendingSlideIdByNumber.set(slideNumber, slideId);
       try {
         return await task;
@@ -997,7 +967,7 @@ export async function generateDeck({
     const initialContent: Parameters<typeof user>[0] = [
       { type: "input_text", text: `Author, render, and publish this image-native presentation deck:\n${JSON.stringify(authoringRequest, null, 2)}` },
       ...imageInputs.flatMap((image) => [
-        { type: "input_text" as const, text: `Attached image ${image.attachment.id}: ${image.attachment.name}` },
+        { type: "input_text" as const, text: `Attached image ${image.attachment.id}: ${image.attachment.name}; reusable visual ID: ${image.visualId}` },
         { type: "input_image" as const, image: image.dataUrl },
       ]),
     ];

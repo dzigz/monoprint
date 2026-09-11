@@ -1,7 +1,7 @@
 // Brief attachments: uploaded files, linked pages, and local folders.
 //
-// Files are stored beside the deck and exposed to the author through two
-// tools (list and read). Links are fetched on demand. Folders reuse the
+// Files are stored beside the deck and exposed through text and visual
+// inspection tools. Links are fetched on demand. Folders reuse the
 // read-only repository tools. Every successful read becomes a source record.
 
 import { randomUUID } from "node:crypto";
@@ -10,6 +10,7 @@ import path from "node:path";
 import { tool } from "@openai/agents";
 import { z } from "zod";
 import { httpUrl } from "../src/shared/schema.js";
+import { DocumentVisuals, isVisualDocument, type Visual } from "./documentVisuals.js";
 import type { Attachment, DeckSource, FileSource, WebResearchSource } from "../src/shared/types.js";
 
 const MAX_TEXT_CHARS = 1_500_000;
@@ -23,6 +24,8 @@ export type ExtractedAttachment = {
   text?: string;
   pages?: number;
   error?: string;
+  visuals?: Visual[];
+  warnings?: string[];
 };
 
 export function extractLinks(text: string) {
@@ -31,46 +34,17 @@ export function extractLinks(text: string) {
 }
 
 export function isImageAttachment(attachment: Attachment) {
-  return attachment.kind === "file" && Boolean(attachment.mimeType && IMAGE_MIME_TYPES.has(attachment.mimeType));
+  return attachment.kind === "file" && (Boolean(attachment.mimeType && IMAGE_MIME_TYPES.has(attachment.mimeType)) || /\.(png|jpe?g|webp|gif)$/i.test(attachment.name));
 }
 
-async function extractPdfText(filePath: string) {
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const data = new Uint8Array(await readFile(filePath));
-  const document = await pdfjs.getDocument({ data, useSystemFonts: true, disableFontFace: true }).promise;
-  const pages: string[] = [];
-  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
-    const page = await document.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const text = content.items
-      .map((item) => ("str" in item ? item.str : ""))
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim();
-    pages.push(`[Page ${pageNumber}]\n${text}`);
-  }
-  return { text: pages.join("\n\n"), pages: document.numPages };
-}
-
-async function extractDocxText(filePath: string) {
-  const mammoth = await import("mammoth");
-  const result = await mammoth.extractRawText({ path: filePath });
-  return result.value;
-}
-
-export async function extractAttachment(attachment: Attachment): Promise<ExtractedAttachment> {
+export async function extractAttachment(attachment: Attachment, visuals = new DocumentVisuals([attachment])): Promise<ExtractedAttachment> {
   if (attachment.kind !== "file" || !attachment.path) return { attachment, kind: "binary" };
   const extension = path.extname(attachment.name).toLowerCase();
   const mimeType = attachment.mimeType ?? "";
   try {
-    if (IMAGE_MIME_TYPES.has(mimeType)) return { attachment, kind: "image" };
-    if (extension === ".pdf" || mimeType === "application/pdf") {
-      const { text, pages } = await extractPdfText(attachment.path);
-      return { attachment, kind: "text", text: text.slice(0, MAX_TEXT_CHARS), pages };
-    }
-    if (extension === ".docx" || mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-      const text = await extractDocxText(attachment.path);
-      return { attachment, kind: "text", text: text.slice(0, MAX_TEXT_CHARS) };
+    if (isVisualDocument(attachment)) {
+      const document = await visuals.document(attachment);
+      return { attachment, kind: isImageAttachment(attachment) ? "image" : "text", ...document };
     }
     if (TEXT_EXTENSIONS.has(extension) || mimeType.startsWith("text/") || mimeType === "application/json") {
       const text = await readFile(attachment.path, "utf8");
@@ -142,7 +116,8 @@ export async function fetchLinkText(url: string, signal?: AbortSignal) {
 export class AttachmentLibrary {
   private readonly extracted = new Map<string, Promise<ExtractedAttachment>>();
 
-  constructor(readonly attachments: Attachment[]) {}
+  readonly visuals: DocumentVisuals;
+  constructor(readonly attachments: Attachment[], signal?: AbortSignal) { this.visuals = new DocumentVisuals(attachments, signal); }
 
   get files() {
     return this.attachments.filter((attachment) => attachment.kind === "file");
@@ -159,19 +134,21 @@ export class AttachmentLibrary {
   extract(attachment: Attachment) {
     let pending = this.extracted.get(attachment.id);
     if (!pending) {
-      pending = extractAttachment(attachment);
+      pending = extractAttachment(attachment, this.visuals);
       this.extracted.set(attachment.id, pending);
     }
     return pending;
   }
 
   async imageInputs() {
-    const images: Array<{ attachment: Attachment; dataUrl: string }> = [];
-    for (const attachment of this.files) {
-      if (!isImageAttachment(attachment) || !attachment.path) continue;
-      const bytes = await readFile(attachment.path);
-      if (bytes.byteLength > 12_000_000) continue;
-      images.push({ attachment, dataUrl: `data:${attachment.mimeType};base64,${bytes.toString("base64")}` });
+    const images: Array<{ attachment: Attachment; visualId: string; dataUrl: string }> = [];
+    for (const attachment of this.files.filter(isImageAttachment).slice(0, 8)) {
+      const extracted = await this.extract(attachment);
+      const visual = extracted.visuals?.[0];
+      if (!visual) continue;
+      const prepared = await this.visuals.prepare(visual.id);
+      const bytes = await readFile(prepared.path);
+      images.push({ attachment, visualId: visual.id, dataUrl: `data:image/png;base64,${bytes.toString("base64")}` });
     }
     return images;
   }
@@ -190,6 +167,8 @@ export class AttachmentLibrary {
           ...(extracted.pages ? { pages: extracted.pages } : {}),
           ...(extracted.text ? { characters: extracted.text.length } : {}),
           ...(extracted.error ? { note: extracted.error } : {}),
+          visualCount: extracted.visuals?.length ?? 0,
+          ...(extracted.warnings?.length ? { warnings: extracted.warnings } : {}),
         });
       } else if (attachment.kind === "link") {
         entries.push({ id: attachment.id, kind: "link", url: attachment.url });
@@ -201,7 +180,7 @@ export class AttachmentLibrary {
   }
 }
 
-export const attachmentToolNames = new Set(["list_attachments", "read_attachment", "open_link"]);
+export const attachmentToolNames = new Set(["list_attachments", "read_attachment", "list_attachment_visuals", "view_attachment_visual", "open_link"]);
 
 export function isAttachmentToolName(name: string) {
   return attachmentToolNames.has(name);
@@ -240,7 +219,7 @@ export function createAttachmentTools({
       if (!attachment || attachment.kind !== "file") throw new Error(`Unknown attachment ${attachmentId}.`);
       await onActivity(`Reading ${attachment.name}.`, "file");
       const extracted = await library.extract(attachment);
-      if (extracted.kind === "image") return JSON.stringify({ attachmentId, note: "This attachment is an image and was supplied to you visually in the brief." });
+      if (extracted.kind === "image") return JSON.stringify({ attachmentId, note: "Use list_attachment_visuals and view_attachment_visual to inspect this image and obtain a visual ID for generate_slide_image." });
       if (!extracted.text) throw new Error(extracted.error ?? "This attachment has no readable text.");
       const end = Math.min(extracted.text.length, startChar + maxChars);
       const source: FileSource = {
@@ -258,6 +237,8 @@ export function createAttachmentTools({
         startChar,
         endChar: end,
         hasMore: end < extracted.text.length,
+        visualCount: extracted.visuals?.length ?? 0,
+        warnings: extracted.warnings,
         text: extracted.text.slice(startChar, end),
         source,
       });
@@ -297,5 +278,30 @@ export function createAttachmentTools({
     },
   });
 
-  return [listAttachments, readAttachment, openLink];
+  const listVisuals = tool({
+    name: "list_attachment_visuals",
+    description: "List page/slide previews, embedded images, and saved crops from uploaded PDF, DOCX, PPTX, and image files. Stable visual IDs can be inspected and passed to generate_slide_image. Paginate to see all results.",
+    parameters: z.object({ attachmentId: z.string().optional(), start: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }),
+    async execute({ attachmentId, start = 0, limit = 50 }) {
+      await onActivity("Listing source visuals.", "file");
+      const visuals = await library.visuals.list(attachmentId);
+      return JSON.stringify({ visuals: visuals.slice(start, start + limit), total: visuals.length, hasMore: start + limit < visuals.length });
+    },
+  });
+  const viewVisual = tool({
+    name: "view_attachment_visual",
+    description: "See an uploaded image, embedded document image, or rendered page/slide. Optionally crop using normalized coordinates (0–1) to isolate a chart, photograph, or diagram. Returns actual image pixels and a reusable visual ID. Inspect source visuals before selecting them for generation.",
+    parameters: z.object({ visualId: z.string().min(1), crop: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().positive().max(1), height: z.number().positive().max(1) }).optional() }),
+    async execute({ visualId, crop }) {
+      await onActivity("Inspecting a source visual.", "file");
+      const id = crop ? await library.visuals.crop(visualId, crop) : visualId;
+      const visual = await library.visuals.prepare(id);
+      await onSource(visual.source);
+      return [
+        { type: "text" as const, text: JSON.stringify({ visualId: id, name: visual.name, locator: visual.locator, width: visual.width, height: visual.height, source: visual.source }) },
+        { type: "image" as const, image: `data:image/png;base64,${(await readFile(visual.path)).toString("base64")}`, detail: "high" as const },
+      ];
+    },
+  });
+  return [listAttachments, readAttachment, listVisuals, viewVisual, openLink];
 }

@@ -6,9 +6,9 @@ A monoprint is a one-of-a-kind print pulled from a plate. Each slide here is exa
 
 ## How it works
 
-1. **Brief.** One prompt box. Write what you need in your own words; audience, slide count, and tone are inferred. Drop files (PDF, DOCX, text, images), paste links, or choose a local folder such as a codebase.
+1. **Brief.** One prompt box. Write what you need in your own words; audience, slide count, and tone are inferred. Drop files (PDF, DOCX, PPTX, text, images), paste links, or choose a local folder such as a codebase.
 2. **Author.** An agent plans the story, reads your sources, chooses fonts from the fonts installed on this Mac, defines a palette, writes the full spoken talk for each slide, and paints every slide with GPT Image. The working screen shows its decisions as they land.
-3. **Recover.** The moment a slide is painted it enters the text pipeline in `font_matching_proto` (branch `proto/font-matching`), while the remaining slides are still being painted. The pipeline finds the text, erases it from the image, fits the deck's own fonts to the pixels, and returns positions, sizes, colors, and fitted font files. Monoprint turns that into a background plate plus text blocks and attaches them to the slide at publication, or right away if the deck is already published. The pipeline is single-threaded by design, so slides queue in painting order; each takes a few minutes.
+3. **Recover.** The moment a slide is painted it enters the pinned text pipeline in `.local/pipeline`, while the remaining slides are still being painted. The pipeline finds the text, erases it from the image, fits the deck's own fonts to the pixels, and returns positions, sizes, colors, and fitted font files. Monoprint turns that into a background plate plus text blocks and attaches them to the slide at publication, or right away if the deck is already published. The pipeline is single-threaded by design, so slides queue in painting order; each takes a few minutes.
 4. **Edit.** Click text to select, double-click to type, drag to move with snapping, pull the side handles to resize, and use the floating toolbar for alignment, bold, italic, and size steps. Everything else goes through the prompt panel: rewrites, renames across the deck, palette or font changes, and repaints, which you confirm before they run.
 
 Every slide passes through the same stages, and both the working screen and the editor show them: waiting, painting, painted, recovering text, editable. Unfinished slides appear dimmed and their canvas text cannot be edited yet. "Recover again" on a slide runs the pipeline afresh; everything else reuses a finished run when one exists.
@@ -51,7 +51,7 @@ Text recovery needs the sidecar from the font-matching pipeline running on port 
 npm run sidecar
 ```
 
-That script expects the pipeline worktree at `~/Documents/font_matching_proto` and the Python environment at `~/Documents/font_realtime_generation/.venv`. Override with `SIDECAR_ROOT` and `SIDECAR_PYTHON`. It starts the pipeline's design agent in `aesthetic` mode; set `SIDECAR_DESIGN_AGENT_MODE=overlay` for the measurement-overlay variant. The mode is read once when the sidecar starts, so restart it after changing it. Code changes in the pipeline also need a sidecar restart, since a running sidecar keeps the modules it has already imported. The pipeline needs its own `.env` with `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `DATALAB_API_KEY`.
+Both `npm run local` and `npm run sidecar` use `.local/pipeline`, `.local/python`, and the exact pipeline revision recorded in `runtime-lock.json`. The sidecar command starts only the pipeline, for use with a separately launched app. It starts the pipeline's design agent in `aesthetic` mode; set `SIDECAR_DESIGN_AGENT_MODE=overlay` for the measurement-overlay variant. The mode is read once when the sidecar starts, so restart it after changing it. Code changes in the pipeline also need a sidecar restart, since a running sidecar keeps the modules it has already imported. The pipeline needs its own `.env` with `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `DATALAB_API_KEY`.
 
 ## Configuration
 
@@ -61,20 +61,31 @@ That script expects the pipeline worktree at `~/Documents/font_matching_proto` a
 | `ARTIFACTS_ROOT` | `./artifacts` | Where decks, images, fonts, and attachments are stored |
 | `FONT_LIBRARY_PATH` | macOS font folders | Font catalog root for the author |
 | `TEXT_LAYER_SIDECAR_URL` | `http://127.0.0.1:4174` | The recovery sidecar |
-| `SIDECAR_RUNS_DIR` | `~/Documents/font_matching_proto/runs/docedit/v4` | Where the sidecar writes its per-slide run directories |
+| `SIDECAR_RUNS_DIR` | `.local/pipeline/runs/docedit/v4` | Where the sidecar writes its per-slide run directories |
 | `SIDECAR_DOC_PREFIX` | `mp` | Prefix for run directory names (`<prefix>_<first 8 chars of the slide image id>`) |
 | `SIDECAR_REUSE_RUNS` | `1` | Reuse a finished run directory instead of calling the sidecar again |
 | `SIDECAR_DESIGN_AGENT` | `1` | Let the pipeline's design agent refine each slide (slower, better) |
 | `SIDECAR_DESIGN_AGENT_MODE` | `aesthetic` | Design-agent variant passed to `npm run sidecar` (`aesthetic` or `overlay`) |
 | `SIDECAR_PORT` | `4174` | Port `npm run sidecar` listens on |
 | `TEXT_FONT_CONSOLIDATION` | `1` | Consolidate compatible fitted fonts within each recovered box using the 2% overall-width limit; `0` disables it |
+| `DOCUMENT_SOFFICE_PATH` | Bundled LibreOffice | Office document preview renderer |
 | `OPENAI_TIMEOUT_MS` | `1200000` | Timeout for long model calls |
+
+## Source documents and images
+
+Uploaded PDFs provide extracted text and page previews, including scanned pages. DOCX and PPTX files provide text, embedded images, and rendered page or slide previews; PPTX extraction follows presentation order and includes speaker notes. The agent can inspect a page visually and crop a chart, diagram, or photograph for reuse. Standalone PNG, JPEG, WebP, and GIF inputs use the same visual path. Legacy `.doc` and `.ppt` files remain unsupported. Links currently provide text; upload a document to use its visuals.
+
+The implementation uses PDF.js for PDF text and raster rendering, ZIP/XML readers for Office text and embedded media, LibreOffice for Office-to-PDF previews, and Sharp for image normalization and crops. `DOCUMENT_SOFFICE_PATH` can override the LibreOffice executable; the prepared Mac defaults to the bundled Codex runtime. If conversion is unavailable, the agent receives an explicit warning and can still use extracted text and supported embedded images. Linked external images are reported and are not downloaded.
+
+The author uses `list_attachment_visuals` and `view_attachment_visual` to inspect source pixels, then selects `sourceVisuals` in `generate_slide_image`, with an instruction for each image. The service sends those actual image files alongside the prompt, followed by its existing style anchors. Up to 14 source visuals fit with the two style anchors. Selecting a source on slide 1 also uses the image-edit endpoint. Source filenames, page/slide locations, IDs, and usage instructions are saved for traceability; content-based IDs and crop recipes survive resume. Earlier-slide style instructions do not suppress the selected source content.
+
+The first eight standalone images are included in the initial brief; all remaining images and document pages are available through the visual tools. Text extraction is limited to 1.5 million characters with a warning for truncated documents, and page images remain available. Visuals are rendered on demand and normalized to PNG at up to 2,400 pixels on the longest edge (page previews up to 2,200); crops use those rendered coordinates. These inputs support a generative rebuild. They do not import native PowerPoint objects or guarantee that image generation preserves source pixels exactly.
 
 ## Recovery adapter
 
 `server/recovery/provider.ts` is the contract: image in, plate and objects out. `server/recovery/sidecarProvider.ts` implements it against the sidecar. It sends the deck's role fonts and role-labelled copy as known typography, then reads the sidecar's run directory for sizes, spacing, fitted fonts, and the composite images. The adapter imports the reviewed background plate and canonical resolved text layout directly, so the editor and export use the same geometry as the pipeline. Font fitting and consolidation happen in the pipeline; the adapter does not perform a second layout pass.
 
-Text removal fills the source text mask with the surrounding background color when local samples agree. Each word samples its own background, excluding nearby text; gradients, textures and color boundaries retain the inpainting fallback. Pixels outside the text mask stay unchanged. Existing saved backgrounds receive this change when their slides are recovered again.
+Text removal fills the source text mask with the surrounding background color when local samples agree; gradients, textures and color boundaries retain the inpainting fallback. The design agent can explicitly repair a region with one solid fill or inpainting, refine its source mask, regroup text blocks, and add text missed by OCR. Graphic protection is limited to each word’s erase region and preserves crossing strokes. Repair transactions preserve existing editable text and layout or roll back; a final coverage audit reports required text that remains unresolved. Pixels outside the erase mask stay unchanged. Existing saved backgrounds receive these changes when their slides are recovered again.
 
 Objects are a discriminated union (`kind: "text"` today) so images, shapes, and charts can join later without changing the host.
 

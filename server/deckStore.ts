@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { access, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { deckSchema, migrateDeck, type AssetDimensions } from "../src/shared/schema.js";
@@ -195,7 +196,7 @@ export class DeckStore {
   }
 
   async saveAttachment(deckId: string, fileName: string, content: Buffer) {
-    const directory = this.attachmentsDirectory(deckId);
+    const directory = path.join(this.attachmentsDirectory(deckId), randomUUID());
     await mkdir(directory, { recursive: true });
     const target = path.join(directory, safeName(fileName));
     await writeFile(target, content);
