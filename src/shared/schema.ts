@@ -8,6 +8,7 @@ import type {
   Slide,
 } from "./types.js";
 import { formatRoleLabeledCopyBlock, slideCopyMatches } from "./slideCopy.js";
+import { targetLanguagesSchema } from "./languages.js";
 import { slideObjectSchema } from "./commands.js";
 
 export const DEFAULT_CANVAS = { width: 1536, height: 864 };
@@ -143,6 +144,7 @@ const briefSchema = z.object({
     audience: z.string().min(1).optional(),
     requestedSlideCount: optionalSlideCount,
     purpose: z.string().min(1).optional(),
+    targetLanguages: targetLanguagesSchema.optional(),
   }).optional(),
 });
 

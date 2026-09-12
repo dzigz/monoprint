@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import type { EditCommand } from "../shared/commands";
-import type { Deck, Frame, Slide, TextObject } from "../shared/types";
-import { cssFontStack, resolveFont } from "./fonts";
-import { snapFrame, type Guide } from "./snapping";
-import { FocusSpotlight } from "./FocusSpotlight";
+import type { EditCommand } from "../shared/commands.js";
+import type { Deck, Frame, Slide, TextObject } from "../shared/types.js";
+import { cssFontStack, resolveFont } from "./fonts.js";
+import { snapFrame, type Guide } from "./snapping.js";
+import { FocusSpotlight } from "./FocusSpotlight.js";
 
 export type SlideCanvasProps = {
   deck: Deck;

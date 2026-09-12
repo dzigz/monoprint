@@ -108,6 +108,8 @@ export type PresentationBrief = {
     audience?: string;
     requestedSlideCount?: number;
     purpose?: string;
+    /** Canonical BCP 47 tags, in priority order; preserve explicit scripts. */
+    targetLanguages?: string[];
   };
 };
 
@@ -332,6 +334,8 @@ export type NarrativeSlidePlan = {
   title: string;
   purpose: string;
   transitionFromPrevious?: string;
+  /** Required in new ready_to_render plans; optional for older checkpoints/storyboards. */
+  copy?: SlideCopyItem[];
 };
 
 /** Catalog font id per design-system role, reported by the author before painting. */
@@ -345,6 +349,7 @@ export type NarrativeUpdate = {
   audienceTakeaway?: string;
   designDirection?: string;
   audience?: string;
+  targetLanguages?: string[];
   requestedSlideCount?: number;
   title?: string;
   typography?: PlannedTypography;

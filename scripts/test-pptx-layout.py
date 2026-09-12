@@ -1,5 +1,5 @@
 """Offline export checks using a small generated font, without deck fixtures."""
-import copy,importlib.util,io,math,struct,tempfile,unittest
+import copy,hashlib,importlib.util,io,json,math,struct,tempfile,unittest
 from pathlib import Path
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
@@ -44,5 +44,21 @@ class LayoutExport(unittest.TestCase):
  def test_restricted_embedding_stops_instead_of_substituting(self):
   f=TTFont(self.root/'fixture.ttf');f['OS/2'].fsType=2;f.save(self.root/'fixture.ttf')
   with self.assertRaisesRegex(ValueError,'editable embedding'):m.prepare(self.payload(),self.root/'fonts')
+ def test_embedding_modes_preserve_permissions_and_full_character_coverage(self):
+  for flags,allowed in [(0,True),(2,False),(4,False),(8,True),(12,True),(256,True),(260,False),(264,True),(512,False),(520,False)]:
+   with self.subTest(fsType=flags):
+    f=TTFont(self.root/'fixture.ttf');f['OS/2'].fsType=flags;f.save(self.root/'fixture.ttf');before=(self.root/'fixture.ttf').read_bytes()
+    directory=self.root/str(flags);directory.mkdir();fonts=m.Fonts(self.files,directory)
+    if allowed:
+     result=fonts.get('f');exported=TTFont(result['path']);self.assertEqual(exported['OS/2'].fsType,flags);self.assertEqual(exported.getBestCmap(),f.getBestCmap())
+    else:
+     with self.assertRaisesRegex(ValueError,'editable embedding'):fonts.get('f')
+    self.assertEqual((self.root/'fixture.ttf').read_bytes(),before)
+ def test_cached_metrics_cannot_bypass_source_embedding_permissions(self):
+  directory=self.root/'fonts';directory.mkdir();allowed=m.Fonts(self.files,directory).get('f')
+  f=TTFont(self.root/'fixture.ttf');f['OS/2'].fsType=4;f.save(self.root/'fixture.ttf')
+  raw=(self.root/'fixture.ttf').read_bytes();digest=hashlib.sha256(raw+b'0'+b'1'+b'export-metrics-v4').hexdigest()[:20]
+  (directory/('MP'+digest+'.json')).write_text(json.dumps(allowed))
+  with self.assertRaisesRegex(ValueError,'editable embedding'):m.Fonts(self.files,directory).get('f')
 
 if __name__=='__main__':unittest.main()

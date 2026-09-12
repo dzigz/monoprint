@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type OpenAI from "openai";
 import {
   Agent,
   isOpenAIResponsesRawModelStreamEvent,
@@ -37,7 +38,6 @@ import type {
   DeckAsset,
   DeckColors,
   DeckSource,
-  FontCatalogEntry,
   GenerateDeckRequest,
   GenerationProgress,
   NarrativeUpdate,
@@ -51,7 +51,9 @@ import { attachRecord } from "./recoveryManager.js";
 import { AttachmentLibrary, createAttachmentTools, extractLinks, isAttachmentToolName } from "./attachments.js";
 import { DeckStore } from "./deckStore.js";
 import { imageDimensions } from "./recovery/plate.js";
-import { fontCatalogForPrompt } from "./fontCatalog.js";
+import type { FontEligibility } from "./fontEligibility.js";
+import { AuthoringFontPlan, createFetchFontsTool } from "./authoringFonts.js";
+import { canonicalLanguages, targetLanguagesSchema, targetLanguageInstruction } from "../src/shared/languages.js";
 import { getOpenAIClient } from "./openaiClient.js";
 import { requestSlideImage, sourceVisualSelectionSchema, type SourceVisualSelection, type SourceVisualInput } from "./slideImageRequest.js";
 import {
@@ -202,17 +204,18 @@ function isTerminalStateResumeError(error: unknown) {
 export async function generateDeck({
   deckId,
   request,
-  fontCatalog,
+  fontEligibility,
   store,
   resume = false,
   signal,
   initialAttempt = 0,
   onProgress = async () => {},
   onAssetReady,
+  openaiClient,
 }: {
   deckId: string;
   request: GenerateDeckRequest;
-  fontCatalog: FontCatalogEntry[];
+  fontEligibility: FontEligibility;
   store: DeckStore;
   resume?: boolean;
   signal?: AbortSignal;
@@ -220,8 +223,11 @@ export async function generateDeck({
   onProgress?: (progress: GenerationProgress) => Promise<void>;
   /** Called the moment a slide image is written, so text recovery can start before publication. */
   onAssetReady?: (input: AssetRecoveryInput) => Promise<void>;
+  /** Optional transport for deterministic integration tests or an embedding host. */
+  openaiClient?: OpenAI;
 }) {
-  if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured.");
+  if (!openaiClient && !process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured.");
+  const fontCatalog = fontEligibility.catalog.entries;
 
   const folderAttachment = request.attachments.find((attachment) => attachment.kind === "folder" && attachment.path);
   const repositoryRoot = folderAttachment?.path
@@ -239,6 +245,7 @@ export async function generateDeck({
   const attachmentIds = new Set(attachments.filter((attachment) => attachment.kind === "file").map((attachment) => attachment.id));
   const observedFileAndLinkSources = new Map<string, DeckSource>();
   let inferredAudience: string | undefined;
+  let restoredLanguages: string[] | undefined;
   const explicitSlideCount = extractRequestedSlideCount(request.prompt);
   let inferredSlideCount: number | undefined = explicitSlideCount;
   let plannedDesign: { typography: PlannedTypography; colors: DeckColors } | undefined;
@@ -282,7 +289,7 @@ export async function generateDeck({
     }
     assetBySlideNumber.set(asset.slideNumber, asset);
   }
-  const pendingBySlideId = new Map<string, { slideNumber: number; sourceVisuals?: SourceVisualSelection[]; promise: Promise<string> }>();
+  const pendingBySlideId = new Map<string, { slideNumber: number; copy: SlideCopyItem[]; sourceVisuals?: SourceVisualSelection[]; promise: Promise<string> }>();
   const pendingSlideIdByNumber = new Map<number, string>();
   const runImageGeneration = createConcurrencyGate(MAX_PARALLEL_SLIDE_IMAGES);
   const firstSlideReady = createDeferred<DeckAsset>();
@@ -313,12 +320,18 @@ export async function generateDeck({
       const generation = await store.loadGeneration(deckId);
       const framing = [...(generation.narrativeUpdates ?? [])].reverse().find((update) => update.stage === "framing");
       inferredAudience = framing?.audience;
+      restoredLanguages = framing?.targetLanguages;
       inferredSlideCount = explicitSlideCount ?? framing?.requestedSlideCount;
       const designUpdate = [...(generation.narrativeUpdates ?? [])].reverse().find((update) => update.typography && update.colors);
       if (designUpdate?.typography && designUpdate.colors) plannedDesign = { typography: designUpdate.typography, colors: designUpdate.colors };
     } catch {
       // No framing update was recorded.
     }
+  }
+
+  const fontPlan = new AuthoringFontPlan(fontEligibility, readyNarrativePlan, restoredLanguages, persistedAssets);
+  if (readyNarrativePlan?.typography && readyNarrativePlan.colors) {
+    plannedDesign = { typography: readyNarrativePlan.typography, colors: readyNarrativePlan.colors };
   }
 
   async function saveAssets() {
@@ -328,7 +341,7 @@ export async function generateDeck({
   }
 
   await saveAssets();
-  const openai = getOpenAIClient();
+  const openai = openaiClient ?? getOpenAIClient();
   const runner = new Runner({ modelProvider: new OpenAIProvider({ openAIClient: openai }) });
   let publishedDeck: Deck | undefined;
   let publicationAttempts = 0;
@@ -352,6 +365,7 @@ export async function generateDeck({
   }
 
   async function finalizeDeck(input: PublishedDeckInput) {
+    fontPlan.assertPublishedDesign(input.designSystem.typography, input.designSystem.colors);
     if (!readyNarrativePlan?.slides) {
       throw new Error("A ready_to_render narrative plan must be reported before publication.");
     }
@@ -441,6 +455,7 @@ export async function generateDeck({
         inferred: {
           ...(inferredAudience ? { audience: inferredAudience } : {}),
           ...(inferredSlideCount ? { requestedSlideCount: inferredSlideCount } : {}),
+          ...(fontPlan.languages ? { targetLanguages: fontPlan.languages } : {}),
         },
       },
       designSystem: normalizedInput.designSystem,
@@ -495,8 +510,11 @@ export async function generateDeck({
 
   async function styleReferencesFor(slideNumber: number) {
     if (slideNumber === 1) return [];
-    if (slideNumber === 2) return [await firstSlideReady.promise];
-    return Promise.all([firstSlideReady.promise, secondSlideReady.promise]);
+    // A failed earlier attempt can reject a waiter. A successfully retried or
+    // checkpointed anchor is authoritative and must not inherit that rejection.
+    const first = assetBySlideNumber.get(1) ?? firstSlideReady.promise;
+    if (slideNumber === 2) return [await first];
+    return Promise.all([first, assetBySlideNumber.get(2) ?? secondSlideReady.promise]);
   }
 
   function assetFilePath(asset: DeckAsset) {
@@ -515,7 +533,6 @@ export async function generateDeck({
   ) {
     try {
       throwIfAborted(signal);
-      const productionPrompt = appendRoleLabeledCopyBlock(prompt, copy);
       const plannedSlide = readyNarrativePlan?.slides?.find((slide) => slide.slideNumber === slideNumber);
       if (!readyNarrativePlan || !plannedSlide) {
         throw new Error("Report a complete ready_to_render narrative plan before generating slide images.");
@@ -573,6 +590,13 @@ export async function generateDeck({
           reused: true,
         });
       }
+
+      await fontPlan.beforeImage(slideNumber, slideId, copy);
+      const productionPrompt = appendRoleLabeledCopyBlock([
+        prompt,
+        targetLanguageInstruction(fontPlan.languages),
+        fontPlan.promptSpecification(),
+      ].join("\n\n"), copy);
 
       const sourceVisuals: SourceVisualInput[] = [];
       for (const selected of selectedVisuals ?? []) {
@@ -687,6 +711,7 @@ export async function generateDeck({
     title: z.string().min(1),
     purpose: z.string().min(1),
     transitionFromPrevious: z.string().min(1).optional(),
+    copy: slideCopySchema.optional().describe("Complete final copy with fontRole for each item. Required for every slide in ready_to_render so the whole deck can pass font preflight before any image is generated."),
   });
 
   const reportNarrativeProgress = tool({
@@ -699,6 +724,7 @@ export async function generateDeck({
       audienceTakeaway: z.string().min(1).optional(),
       designDirection: z.string().min(1).optional(),
       audience: z.string().min(1).optional().describe("Framing only: the audience inferred from the prompt, as a short phrase."),
+      targetLanguages: targetLanguagesSchema.optional().describe("Target presentation languages in priority order, using BCP 47 tags with scripts when relevant. Required in framing. Honor an explicitly requested output language over the language of the prompt or sources."),
       requestedSlideCount: z.number().int().positive().max(60).optional().describe("Framing only: the slide count the user explicitly wrote in the prompt. Omit when the prompt states no number; do not estimate."),
       title: z.string().min(1).optional().describe("Working deck title, from the storyboard onward."),
       typography: z.object({
@@ -721,8 +747,11 @@ export async function generateDeck({
     async execute(rawUpdate) {
       let acceptedReadyPlan: NarrativeUpdate | undefined;
       const update = { ...rawUpdate };
+      if (update.targetLanguages) update.targetLanguages = canonicalLanguages(update.targetLanguages);
       const notes: string[] = [];
+      fontPlan.assertUpdateAllowed(update);
       if (update.stage === "framing") {
+        if (!update.targetLanguages?.length) throw new Error("Framing requires targetLanguages: infer the requested presentation language(s) and script(s) from the user's brief.");
         if (update.audience) inferredAudience = update.audience;
         if (update.requestedSlideCount !== undefined) {
           if (explicitSlideCount === undefined) {
@@ -736,12 +765,11 @@ export async function generateDeck({
       }
       if (update.typography) {
         const missing = FONT_ROLE_NAMES.filter((role) => !catalogFontIds.has(update.typography?.[role] ?? ""));
-        if (missing.length) throw new Error(`Typography references font ids that are not in availableFonts for roles: ${missing.join(", ")}.`);
+        if (missing.length) throw new Error(`Typography references unavailable font ids for roles: ${missing.join(", ")}. Call fetch_fonts for compatible faces.`);
       }
       if (update.stage === "ready_to_render" && (!update.typography || !update.colors)) {
         throw new Error("ready_to_render progress requires the final typography (catalog font ids per role) and colors (seven hex values).");
       }
-      if (update.typography && update.colors) plannedDesign = { typography: update.typography, colors: update.colors };
       if (["storyboard", "ready_to_render"].includes(update.stage) && !update.slides?.length) {
         throw new Error(`${update.stage} progress requires the ordered slide plan.`);
       }
@@ -762,12 +790,17 @@ export async function generateDeck({
         if (inferredSlideCount !== undefined && update.slides.length !== inferredSlideCount) {
           throw new Error(`The brief asked for exactly ${inferredSlideCount} slides; plan exactly that many.`);
         }
-        acceptedReadyPlan = {
+        acceptedReadyPlan = await fontPlan.accept({
           ...update,
           id: randomUUID(),
           createdAt: new Date().toISOString(),
-        };
+        });
+        update.targetLanguages = acceptedReadyPlan.targetLanguages;
       }
+
+      if (update.stage !== "ready_to_render") fontPlan.recordPlanningUpdate(update);
+      if (update.typography && update.colors) plannedDesign = { typography: update.typography, colors: update.colors };
+      if (acceptedReadyPlan) readyNarrativePlan = acceptedReadyPlan;
 
       await onProgress({
         phase: "reasoning",
@@ -777,7 +810,6 @@ export async function generateDeck({
         ...(update.title ? { title: update.title } : {}),
         narrativeUpdate: update,
       });
-      if (acceptedReadyPlan) readyNarrativePlan = acceptedReadyPlan;
       return JSON.stringify({ recorded: true, stage: update.stage, slides: update.slides?.length ?? 0, ...(notes.length ? { notes } : {}) });
     },
   });
@@ -796,6 +828,7 @@ export async function generateDeck({
     async execute({ slideNumber, slideId, copy, prompt, alt, sourceVisuals }) {
       const pending = pendingBySlideId.get(slideId);
       if (pending) {
+        if (!slideCopyMatches(pending.copy, copy)) throw new Error(`Slide ${slideId} is pending with different copy.`);
         if (JSON.stringify(pending.sourceVisuals ?? []) !== JSON.stringify(sourceVisuals ?? [])) throw new Error(`Slide ${slideId} is pending with different source visuals.`);
         if (pending.slideNumber !== slideNumber) {
           throw new Error(`Slide ${slideId} is already pending as slide number ${pending.slideNumber}.`);
@@ -809,7 +842,7 @@ export async function generateDeck({
       }
 
       const task = generateSlide(slideNumber, slideId, prompt, copy, alt, sourceVisuals);
-      pendingBySlideId.set(slideId, { slideNumber, sourceVisuals, promise: task });
+      pendingBySlideId.set(slideId, { slideNumber, copy, sourceVisuals, promise: task });
       pendingSlideIdByNumber.set(slideNumber, slideId);
       try {
         return await task;
@@ -916,6 +949,7 @@ export async function generateDeck({
       webSearchTool({ searchContextSize: "medium" }),
       ...attachmentTools,
       ...repositoryTools,
+      createFetchFontsTool(fontEligibility),
       reportNarrativeProgress,
       generateSlideImage,
       publishDeck,
@@ -938,11 +972,13 @@ export async function generateDeck({
         grounding: "Claims about this implementation must be grounded in repository source references with relative paths and inclusive line ranges.",
       },
     } : {}),
-    availableFonts: fontCatalogForPrompt(fontCatalog),
+    fontDiscovery: "Call fetch_fonts with the target languages/scripts to discover compatible font faces. Supply actual copy to refine the results. Report final copy for every slide in ready_to_render; the service checks every assigned face before rendering.",
+    ...(fontPlan.languages ? { targetLanguages: fontPlan.languages } : {}),
   };
 
   const continuationInstruction = [
     "Continue and finish the same image-native deck; the previous run ended before publication.",
+    "Preserve the checkpoint's targetLanguages, typography and exact slide copy. If an older checkpoint has no language or complete copy plan, report the target languages and a complete ready_to_render plan before generating unfinished images; keep the existing images and their fonts/copy unchanged.",
     "The underlying rendering transport has been restored, so retry the unfinished image work now.",
     "Do not regenerate completed slide images. Call generate_slide_image with each completed slide's exact prior slideNumber and slideId so the service can reuse its checkpointed asset.",
     "Follow the required anchor sequence for any unfinished images, publish the complete deck, and do not stop after merely describing an earlier error.",

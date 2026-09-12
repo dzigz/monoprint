@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type {
   AssetRecoveryInput,
   Deck,
-  FontCatalogEntry,
   GenerateDeckRequest,
   GenerationProgress,
   GenerationRecord,
@@ -10,6 +9,7 @@ import type {
 } from "../src/shared/types.js";
 import { DeckStore } from "./deckStore.js";
 import { generateDeck } from "./generator.js";
+import { FontEligibility } from "./fontEligibility.js";
 
 type Listener = (record: GenerationRecord) => void;
 type GenerationExecutor = (args: Parameters<typeof generateDeck>[0]) => Promise<Deck>;
@@ -32,7 +32,7 @@ export class GenerationManager {
 
   constructor(
     private readonly store: DeckStore,
-    private readonly fontCatalog: FontCatalogEntry[],
+    private readonly fontEligibility: FontEligibility,
     private readonly executor: GenerationExecutor = generateDeck,
   ) {}
 
@@ -205,7 +205,7 @@ export class GenerationManager {
       const deck = await this.executor({
         deckId: record.deckId,
         request: record.request,
-        fontCatalog: this.fontCatalog,
+        fontEligibility: this.fontEligibility,
         store: this.store,
         resume,
         signal,

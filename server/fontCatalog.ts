@@ -5,7 +5,6 @@ import * as fontkit from "fontkit";
 import type { FontCatalogEntry, FontMetrics } from "../src/shared/types.js";
 
 const supportedExtensions = new Set([".ttf", ".otf", ".ttc", ".woff", ".woff2"]);
-const excludedReferenceFonts = /emoji|braille|symbols|wingdings|webdings|zapf|lastresort|hiragino|pingfang|songti|kaiti|heiti|gurmukhi|kohinoor|mishafi|noto sans (?!$)/i;
 
 type FontFile = {
   absolutePath: string;
@@ -134,12 +133,10 @@ export async function loadFontCatalog(roots: string | string[]): Promise<LoadedF
   const resolvedRoots = (Array.isArray(roots) ? roots : [roots]).map((root) => path.resolve(root));
   const fontFiles = (await Promise.all(resolvedRoots.map((root) => collectFontFiles(root))))
     .flat()
-    .filter((font, index, files) => files.findIndex((candidate) => candidate.absolutePath === font.absolutePath) === index)
-    .filter((font) => !excludedReferenceFonts.test(font.relativePath));
+    .filter((font, index, files) => files.findIndex((candidate) => candidate.absolutePath === font.absolutePath) === index);
   const faces = new Map<string, FontFace>();
   const entries = fontFiles.flatMap(({ absolutePath, relativePath }) =>
     readFontEntries(absolutePath, relativePath)
-      .filter(({ family }) => !excludedReferenceFonts.test(family))
       .map(({ faceIndex, family, subfamily, axes, fullName, postscriptName, preferredFamily, preferredSubfamily, weight, italic }) => {
         const id = catalogId(`${absolutePath}#${faceIndex}`);
         faces.set(id, { absolutePath, faceIndex, fullName, postscriptName, preferredFamily, preferredSubfamily, weight, italic });

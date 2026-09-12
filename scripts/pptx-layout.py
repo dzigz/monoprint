@@ -40,6 +40,12 @@ class Fonts:
         spec=self.files.get(identifier)
         if not spec:raise ValueError('Missing font file: '+identifier)
         raw=Path(spec['path']).read_bytes()
+        # Check source permissions even on a cache hit. Cached export metrics
+        # cannot authorize embedding, and fitting must preserve these flags.
+        font=TTFont(io.BytesIO(raw),fontNumber=spec.get('face_index',0))
+        permissions=font['OS/2'].fsType
+        if permissions & 512 or (permissions & (2|4) and not permissions & 8):
+            raise ValueError('Font does not permit editable embedding: '+identifier)
         digest=hashlib.sha256(raw+str(spec.get('face_index',0)).encode()+str(scale).encode()+b'export-metrics-v4').hexdigest()[:20]
         family='MP'+digest
         cache_file=self.directory/(family+'.json')
@@ -49,10 +55,6 @@ class Fonts:
                 face=hb.Face(data);hf=hb.Font(face);hf.scale=(face.upem,face.upem);hb.ot_font_set_funcs(hf)
                 self.faces[family]=hf;self.cache[key]={**result,'sourceId':identifier};return self.cache[key]
             except (OSError,ValueError,KeyError):pass
-        font=TTFont(io.BytesIO(raw),fontNumber=spec.get('face_index',0))
-        permissions=font['OS/2'].fsType
-        if permissions & 512 or (permissions & (2|4) and not permissions & 8):
-            raise ValueError('Font does not permit editable embedding: '+identifier)
         if 'fvar' in font:
             from fontTools.varLib.instancer import instantiateVariableFont
             font=instantiateVariableFont(font,{a.axisTag:a.defaultValue for a in font['fvar'].axes},inplace=True)

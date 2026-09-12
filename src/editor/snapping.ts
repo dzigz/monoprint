@@ -1,4 +1,4 @@
-import type { Frame, Slide, SlideObject } from "../shared/types";
+import type { Frame, Slide, SlideObject } from "../shared/types.js";
 
 export type Guide = { axis: "x" | "y"; position: number; kind: "margin" | "center" | "object" | "origin" };
 

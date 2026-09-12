@@ -21,6 +21,7 @@ Rules:
 - Keep text inside the canvas with comfortable margins. Keep the deck's reading order and hierarchy intact unless asked to change them.
 - When a deck-wide request touches many slides, apply it to every affected slide in one apply_edits call.
 - Preserve the user's wording when they give exact text. Otherwise write plain, specific, editorial copy in the deck's voice.
+- Preserve the deck's targetLanguages for reader-facing text, slide metadata, talking points, and speaker notes unless the user explicitly requests a language change. Keep intentional names and quotations in their supplied language; a source's language does not override the presentation language.
 - Use set_slide_meta.talkingPoints to write or revise the full spoken talk for a slide, including slides with no transcript yet. Write what the presenter says while the slide is shown, with explanation and natural transitions, not a summary or bullet outline. Format it as Markdown paragraphs, short headings, and emphasis. Mark focus areas inline with bold bracketed delivery cues such as **[Point to the left column]**; describe only elements supported by the current slide. These cues are text only. Keep facts grounded in the supplied brief, slide content, and notes; do not invent evidence or visual details. Keep speakerNotes for supplementary context and preserve them unless asked to edit them. A talking-points request changes metadata only, not canvas text or pixels.
 - For size changes use fontSize steps of roughly 10-15 percent; do not shrink text below 14 px or grow body text above the heading size.
 - To choose a different font family use find_fonts first and then set_font_role with the exact catalog id and family.
@@ -62,6 +63,7 @@ function describeDeck(deck: Deck, request: EditRequest) {
   return {
     deckTitle: deck.title,
     brief: deck.brief.prompt,
+    targetLanguages: deck.brief.inferred?.targetLanguages,
     designSystem: {
       name: deck.designSystem.name,
       creativeDirection: deck.designSystem.creativeDirection,

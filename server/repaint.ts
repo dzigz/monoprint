@@ -15,6 +15,7 @@ import type { DeckStore } from "./deckStore.js";
 import { getOpenAIClient } from "./openaiClient.js";
 import { SLIDE_IMAGE_SETTINGS } from "./slideImageSettings.js";
 import { imageDimensions } from "./recovery/plate.js";
+import { targetLanguageInstruction } from "../src/shared/languages.js";
 
 export function copyFromSlide(slide: Slide): SlideCopyItem[] {
   if (slide.layers?.objects.length) {
@@ -44,6 +45,7 @@ export function buildRepaintPrompt(deck: Deck, slide: Slide, instruction: string
     "",
     "REVISION OF AN EXISTING SLIDE",
     `The user asked for this change: ${instruction.trim()}`,
+    targetLanguageInstruction(deck.brief.inferred?.targetLanguages),
     "Keep everything the instruction does not mention: the same design system, background treatment, palette, typography roles, and overall composition logic. The input images are the current version of this slide and the deck's first slide; they are style references only. Apply the change fully rather than hinting at it.",
     `Design system: display ${typography.display.family}, heading ${typography.heading.family}, body ${typography.body.family}, label ${typography.label.family}. Colors: background ${colors.background}, surface ${colors.surface}, text ${colors.text}, muted ${colors.mutedText}, accent ${colors.accent}, accent text ${colors.accentText}, border ${colors.border}.`,
     `Compose across the full ${slide.canvas.width}x${slide.canvas.height} canvas with comfortable margins. Crisp readable typography; no unrequested text, logos, watermarks, or UI chrome.`,

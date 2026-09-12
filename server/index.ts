@@ -14,6 +14,7 @@ import { DeckMutations } from "./deckMutations.js";
 import { DeckStore } from "./deckStore.js";
 import { runEditAgent } from "./editAgent.js";
 import { loadFontCatalog } from "./fontCatalog.js";
+import { FontEligibility } from "./fontEligibility.js";
 import { FontRegistry } from "./fonts.js";
 import { GenerationManager } from "./generationManager.js";
 import { FocusInputError, FocusRegionManager } from "./focusRegionManager.js";
@@ -21,6 +22,7 @@ import { getOpenAIRequestTimeoutMs } from "./openaiClient.js";
 import { SidecarRecoveryProvider } from "./recovery/sidecarProvider.js";
 import { RecoveryManager } from "./recoveryManager.js";
 import { FontConsolidation, FontConsolidationError } from "./fontConsolidation.js";
+import { PdfExporter, PdfExportError } from "./pdfExport.js";
 import { PptxExporter, PptxExportError } from "./pptxExport.js";
 import { RepaintManager } from "./repaint.js";
 import { validateRepositoryRoot } from "./repositoryTools.js";
@@ -57,7 +59,7 @@ const recoveryProvider = new SidecarRecoveryProvider({
   consolidateFonts: !["0", "false", "off", "no"].includes((process.env.TEXT_FONT_CONSOLIDATION ?? "1").trim().toLowerCase()),
   fontRegistry: fonts,
 });
-const generations = new GenerationManager(store, fontCatalog.entries);
+const generations = new GenerationManager(store, new FontEligibility(fontCatalog));
 const recovery = new RecoveryManager(store, mutations, fonts, recoveryProvider);
 const fontConsolidation = new FontConsolidation(store, mutations, fonts, {
   projectRoot,
@@ -69,6 +71,7 @@ const pptxExporter = new PptxExporter(store, fontConsolidation, {
   projectRoot, runtimeRoot: process.env.PPTX_RUNTIME_ROOT,
   pipelineRoot, python: process.env.SIDECAR_PYTHON,
 });
+const pdfExporter = new PdfExporter(store, fontConsolidation);
 const repaints = new RepaintManager(store, mutations, async (deckId, slideId) => {
   await recovery.enqueue(deckId, [slideId], { force: true });
 });
@@ -235,6 +238,20 @@ app.post("/api/decks/:deckId/consolidate-fonts", async (request, response) => {
   } catch (error) {
     const status = error instanceof FontConsolidationError ? error.status : error instanceof z.ZodError ? 400 : 500;
     response.status(status).json({ error: errorMessage(error, "Fonts could not be consolidated.") });
+  }
+});
+
+app.post("/api/decks/:deckId/pdf", async (request, response) => {
+  try {
+    const body = z.object({ expectedRevision: z.number().int().nonnegative() }).parse(request.body);
+    const repaint = repaints.job(request.params.deckId);
+    if (repaint && ["queued", "running"].includes(repaint.status)) throw new PdfExportError("Wait for repainting to finish before exporting.", 409);
+    const bytes = await pdfExporter.run(request.params.deckId, body.expectedRevision);
+    response.type("application/pdf").setHeader("Cache-Control", "no-store").send(bytes);
+  } catch (error) {
+    console.error("PDF export failed.", error);
+    response.status(error instanceof PdfExportError ? error.status : error instanceof z.ZodError ? 400 : 500)
+      .json({ error: errorMessage(error, "PDF export failed.") });
   }
 });
 

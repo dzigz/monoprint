@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { CanvasSize, FocusRegion } from "../shared/types";
+import type { CanvasSize, FocusRegion } from "../shared/types.js";
 
 const FEATHER_PX = 18;
 

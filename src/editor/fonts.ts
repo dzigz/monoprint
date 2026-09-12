@@ -1,10 +1,10 @@
 // Browser font loading for deck fonts. Each deck font is registered under its
 // own id as the CSS family name, so objects can point at an exact face.
 
-import type { Deck, DeckFont, TextStyle } from "../shared/types";
+import type { Deck, DeckFont, TextStyle } from "../shared/types.js";
 
-import { roleFont } from "../shared/fontSelection";
-export { roleFont, resolveFont } from "../shared/fontSelection";
+import { roleFont } from "../shared/fontSelection.js";
+export { roleFont, resolveFont } from "../shared/fontSelection.js";
 
 const loaded = new Map<string, Promise<void>>();
 

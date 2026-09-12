@@ -8,6 +8,7 @@ import type { Deck, PptxExportReport } from "../src/shared/types.js";
 import { resolveFont } from "../src/shared/fontSelection.js";
 import type { DeckStore } from "./deckStore.js";
 import { FontConsolidation, FontConsolidationError } from "./fontConsolidation.js";
+import { embeddingFromBytes, embeddingReason } from "./fontEmbedding.js";
 
 const execute = promisify(execFile);
 export class PptxExportError extends Error {
@@ -17,6 +18,27 @@ type Options = {
   projectRoot: string; runtimeRoot?: string; pipelineRoot?: string; python?: string;
   build?: (deck: Deck, directory: string) => Promise<PptxExportReport>;
 };
+
+type FontFiles = Record<string, { path: string; face_index: number }>;
+
+/** Only inspect fonts actually used in the consolidated export snapshot. */
+export async function assertEditableFontEmbedding(deck: Deck, fontFiles: FontFiles) {
+  const blocked = new Set<string>();
+  const bytes = new Map<string, Promise<Buffer>>();
+  for (const [id, file] of Object.entries(fontFiles)) {
+    const font = deck.fonts.find(candidate => candidate.id === id);
+    const label = font ? `${font.family} (${font.subfamily})` : id;
+    try {
+      let pending = bytes.get(file.path);
+      if (!pending) { pending = readFile(file.path); bytes.set(file.path, pending); }
+      const permission = embeddingFromBytes(await pending, file.face_index);
+      if (!permission.editable) blocked.add(`${label}: ${embeddingReason(permission)}`);
+    } catch { blocked.add(`${label}: embedding permissions could not be verified`); }
+  }
+  if (blocked.size) throw new PptxExportError(
+    `Editable PowerPoint export is blocked by ${[...blocked].join("; ")}. Use replacement fonts that permit editable embedding, or supply font files with that permission. The deck has not been changed.`, 422,
+  );
+}
 
 /** Export under the consolidation mutation lock: never builds from stale input
  * and never saves a half-consolidated deck if export preparation fails. */
@@ -78,7 +100,7 @@ export class PptxExporter {
     } catch { throw new PptxExportError("Export not found. Please export the deck again.",404); }
   }
   private async build(deck: Deck, directory: string): Promise<PptxExportReport> {
-    const fontFiles: Record<string,{path:string;face_index:number}>={};
+    const fontFiles: FontFiles={};
     const selected=new Set<string>();
     // Resolve ordinary edited text with the same face selection as the editor.
     const snapshot=structuredClone(deck);
@@ -95,6 +117,7 @@ export class PptxExporter {
       if (!file) throw new PptxExportError("An editable text font is missing. Recover the affected slide before exporting.",422);
       fontFiles[id]=file;
     }));
+    await assertEditableFontEmbedding(snapshot,fontFiles);
     const backgrounds: Record<string,string>={};
     const assetDirectory=await realpath(this.store.directory(deck.id));
     await Promise.all(snapshot.slides.map(async slide=>{
@@ -117,7 +140,10 @@ export class PptxExporter {
       await execute("sh",[...pythonArgs,"finish",plan,output,"--candidate",candidate],{env,timeout:60_000,maxBuffer:2_000_000});
     } catch(error) {
       const detail=(error as {stderr?:string}).stderr;
-      if (detail?.includes("Font does not permit editable embedding")) throw new PptxExportError("One of the fonts does not permit editable embedding. Export stopped to avoid substituting it.",422);
+      if (detail?.includes("Font does not permit editable embedding")) {
+        const font=snapshot.fonts.find(font=>detail.includes(font.id));
+        throw new PptxExportError(`Editable PowerPoint embedding is blocked for ${font ? `${font.family} (${font.subfamily})` : "a font used by the deck"}. Use an embeddable replacement or a font file that permits editable embedding. The deck has not been changed.`,422);
+      }
       if (detail?.includes("Combined horizontal scaling and rotation")) throw new PptxExportError("A text run combines rotation with horizontal scaling. PowerPoint cannot preserve that transform as native text; export stopped without changing the deck.",422);
       throw error;
     }
